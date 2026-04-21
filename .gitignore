@@ -1,0 +1,30 @@
+# Credentials — NEVER commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+kalshi_private_key.*
+OIEC-Initial-Product.txt
+*-Initial-Product.txt
+api_keys/
+secrets/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+env/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Test artifacts
+shots/
+screenshot*.png
+*.hidden

@@ -1,0 +1,41 @@
+# Render Blueprint — OIEC backend
+# Deploy: push this file to the repo, then Render → New → Blueprint → select repo.
+# Render will create the service using these settings.
+# Secrets (Kalshi key) are set once via the Render dashboard, not here.
+
+services:
+  - type: web
+    name: oiec-backend
+    runtime: python
+    plan: free
+    region: oregon                       # Oregon is Render's lowest-latency for US users
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      # The new Kalshi key — set this in the Render dashboard, not here.
+      # Marked `sync: false` so Render never overwrites dashboard-entered values.
+      - key: KALSHI_KEY_ID
+        sync: false
+      # The PEM contents (not a path, the actual text). On Render we inject
+      # the private key as an env var, not a file on disk.
+      - key: KALSHI_PEM_PEM
+        sync: false
+      - key: KALSHI_ENV
+        value: prod
+      - key: OIEC_POLL_INTERVAL
+        value: "3.0"
+      - key: OIEC_LOG_LEVEL
+        value: INFO
+      # Set this to your GitHub Pages URL after the Pages site is up:
+      #   https://palash-shah.github.io
+      # Separate multiple origins with commas.
+      - key: OIEC_CORS_ORIGINS
+        value: https://palash-shah.github.io
+      # Signal to main.py that we're on Render
+      - key: RENDER
+        value: "true"
