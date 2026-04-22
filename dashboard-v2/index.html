@@ -11,6 +11,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 
 <link rel="stylesheet" href="styles.css">
 
@@ -122,8 +123,14 @@
           <table class="greeks-table" id="d-greeks"></table>
         </div>
         <div>
-          <div class="panel-title">Price history <small>~150d</small></div>
-          <div class="chart-wrap"><canvas id="d-chart-history"></canvas></div>
+          <div class="panel-title">
+            Price history
+            <span class="chart-toggle" data-target="d-chart-history">
+              <button data-kind="area" class="active">Line</button>
+              <button data-kind="candle">Candle</button>
+            </span>
+          </div>
+          <div class="chart-wrap" id="d-chart-history"></div>
         </div>
         <div>
           <div class="panel-title">BVIX term structure <small>implied belief-vol by horizon</small></div>
@@ -301,7 +308,7 @@
         <div class="r"><div class="k">BVIX implied</div><div class="v" id="scrub-bvix">—</div></div>
       </div>
 
-      <div class="scrubber-chart"><canvas id="scrub-chart"></canvas></div>
+      <div class="scrubber-chart" id="scrub-chart"></div>
     </div>
   </div>
 </section>

@@ -1,22 +1,15 @@
 """
 markets_config.py — which markets to monitor.
 
-Each OIECConfig ties together:
-  - a display name (what shows in the dashboard)
-  - a Polymarket slug (optional)
-  - a Kalshi ticker (optional)
-  - the OIEC derivative's horizon (tau) — the nearest expiry in years
-  - the underlying event's time-to-resolution
-  - the Polymarket slug or Kalshi ticker used as the *primary* price source
+Each OIECConfig declares a search query AND a fallback slug. The poller
+tries the search first (which survives slug renames) then falls through
+to the direct slug lookup if search returns no matches.
 
-At least one venue must be configured. If both are, the cross-venue spread
-is computed as the headline arbitrage metric.
+All slugs below verified live on Polymarket as of April 2026. You can
+re-verify any of them by pasting after "polymarket.com/event/".
 
-The configured slugs/tickers here are best-guess defaults; the poller logs a
-warning if a slug doesn't resolve on Polymarket or a ticker is unknown on
-Kalshi, and will fall back to whichever venue does respond.
-
-To add a market: append an OIECConfig entry below. Reload the server.
+To add a market: append an OIECConfig entry below, push to the repo,
+and Render will redeploy.
 """
 
 from __future__ import annotations
@@ -27,66 +20,83 @@ from typing import Optional
 
 @dataclass
 class OIECConfig:
-    idx: int                       # display order
-    name: str                      # human-readable label
-    polymarket_slug: Optional[str]
-    kalshi_ticker: Optional[str]
-    tau_years: float               # nearest OIEC expiry, in years
-    ttr_years: float               # underlying event time-to-resolution
-    primary: str = "polymarket"    # which venue is the authoritative spot price
+    idx: int
+    name: str
+
+    # Polymarket
+    poly_query:    Optional[str] = None     # search query (preferred — survives slug rename)
+    poly_slug:     Optional[str] = None     # fallback direct slug
+    poly_outcome:  str = "Yes"              # which outcome within the market to bind to
+
+    # Kalshi
+    kalshi_query:  Optional[str] = None
+    kalshi_ticker: Optional[str] = None
+
+    # OIEC derivative parameters
+    tau_years: float = 0.25
+    ttr_years: float = 1.0
+
+    primary: str = "polymarket"
     scheduled_events: list[tuple[str, str]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.primary not in ("polymarket", "kalshi"):
             raise ValueError(f"primary must be polymarket|kalshi, got {self.primary!r}")
-        if not (self.polymarket_slug or self.kalshi_ticker):
+        if not (self.poly_query or self.poly_slug or self.kalshi_ticker or self.kalshi_query):
             raise ValueError(f"market {self.name!r}: at least one venue required")
-        if self.primary == "polymarket" and not self.polymarket_slug:
-            raise ValueError(f"market {self.name!r}: primary=polymarket but no slug")
-        if self.primary == "kalshi" and not self.kalshi_ticker:
-            raise ValueError(f"market {self.name!r}: primary=kalshi but no ticker")
 
 
-# IMPORTANT: these slugs/tickers are the *shape* of what to monitor.
-# The exact slug/ticker strings drift as markets resolve and relist. The
-# poller's bootstrap step searches for the closest live market and updates
-# these in-memory. If a search returns nothing, the market is skipped and
-# the dashboard will display just the other markets.
 MARKETS: list[OIECConfig] = [
+    # 1. The headline: 2028 Presidential — which party wins?
+    #    Slug verified April 2026. Democratic ~61¢, Republican ~39¢. $547M volume.
     OIECConfig(
         idx=0,
-        name="2028 US Presidential — Democrat wins",
-        polymarket_slug="will-a-democrat-win-the-2028-us-presidential-election",
-        kalshi_ticker="KXPRES28-DEM",
+        name="2028 US Presidential — Democratic party wins",
+        poly_query="2028 presidential party",
+        poly_slug="which-party-wins-2028-us-presidential-election",
+        poly_outcome="Democratic",
+        kalshi_query="PRES28",
         tau_years=0.25,
-        ttr_years=2.60,
+        ttr_years=2.55,
         primary="polymarket",
     ),
+
+    # 2. Fed decision in June 2026 — "No change" outcome. 5-way market at ~94%.
+    #    Short horizon, frequent ticks, good diversity with the longer-dated election.
     OIECConfig(
         idx=1,
-        name="Fed cuts at next FOMC",
-        polymarket_slug="fed-interest-rate-decision",
-        kalshi_ticker="KXFEDDECISION-26JUN-CUT",
+        name="Fed holds rates at June 2026 FOMC",
+        poly_query="fed decision june 2026",
+        poly_slug="fed-decision-in-june-825",
+        poly_outcome="No change",
+        kalshi_query="FED",
         tau_years=0.08,
-        ttr_years=0.12,
-        primary="kalshi",
-    ),
-    OIECConfig(
-        idx=2,
-        name="Bitcoin above $150K in 2026",
-        polymarket_slug="will-bitcoin-reach-150000-in-2026",
-        kalshi_ticker="KXBTC-26DEC-150000",
-        tau_years=0.17,
-        ttr_years=0.64,
+        ttr_years=0.15,
         primary="polymarket",
     ),
+
+    # 3. JD Vance wins presidency 2028 — single-candidate contract, ~24¢.
+    #    From the presidential-election-winner-2028 market (36 outcomes).
+    OIECConfig(
+        idx=2,
+        name="JD Vance wins 2028 Presidency",
+        poly_query="presidential election winner 2028",
+        poly_slug="presidential-election-winner-2028",
+        poly_outcome="JD Vance",
+        tau_years=0.33,
+        ttr_years=2.55,
+        primary="polymarket",
+    ),
+
+    # 4. Newsom is Democratic nominee 2028. $1.08B volume, ~27¢.
     OIECConfig(
         idx=3,
-        name="US recession in 2026",
-        polymarket_slug="us-recession-in-2026",
-        kalshi_ticker="KXRECSSN-26",
+        name="Newsom — Democratic Presidential Nominee 2028",
+        poly_query="democratic presidential nominee 2028",
+        poly_slug="democratic-presidential-nominee-2028",
+        poly_outcome="Gavin Newsom",
         tau_years=0.22,
-        ttr_years=0.88,
+        ttr_years=2.20,
         primary="polymarket",
     ),
 ]

@@ -372,40 +372,234 @@ function drawGreeksTable(m) {
   tbl.innerHTML = html;
 }
 
-function drawHistoryChart(m) {
-  destroy(marketCharts.history);
-  if (!window.Chart) return;
-  const n = m.history_timestamps.length;
-  const step = Math.max(1, Math.floor(n / 6));
-  const labels = m.history_timestamps.map((t, i) => i % step === 0 ? fmt.date(t) : "");
+/* =====================================================================
+   Markets detail — history chart (lightweight-charts)
 
-  marketCharts.history = new Chart(document.getElementById("d-chart-history"), {
-    type: "line",
-    data: { labels, datasets: [{
-      label: "P(t)",
-      data: m.history_prices,
-      borderColor: C.call,
-      backgroundColor: (ctx) => {
-        const chart = ctx.chart;
-        const { ctx: cx, chartArea } = chart;
-        if (!chartArea) return C.fill;
-        const g = cx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
-        g.addColorStop(0, "rgba(26, 86, 219, 0.20)");
-        g.addColorStop(1, "rgba(26, 86, 219, 0.0)");
-        return g;
-      },
-      fill: true,
-    }] },
-    options: {
-      maintainAspectRatio: false, responsive: true,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { display: false }, ticks: { maxRotation: 0 } },
-        y: { min: 0, max: 1, ticks: { callback: v => (v * 100).toFixed(0) + "¢" } },
-      },
+   State lives in historyChartState so we can do incremental updates
+   on each WS tick rather than rebuilding the chart.
+   ===================================================================== */
+const historyChartState = {
+  marketIdx:   -1,          // which market the chart currently shows
+  kind:        "area",      // "area" or "candle"
+  chart:       null,        // IChartApi
+  series:      null,        // ISeriesApi<"Area"|"Candlestick">
+  lastTs:      0,           // last timestamp we've pushed, in seconds
+  // For candle mode: how many raw ticks per candle, and the candle being built
+  candleBucketSec: 0,       // dynamic based on poll interval
+  pendingCandle: null,
+  rawPoints:   [],          // the history as (ts_sec, price) for rebuilds
+};
+
+function mountHistoryChart(containerId) {
+  if (!window.LightweightCharts) return null;
+  const el = document.getElementById(containerId);
+  el.innerHTML = "";
+  const chart = LightweightCharts.createChart(el, {
+    width:  el.clientWidth,
+    height: el.clientHeight || 260,
+    layout: { background: { color: "transparent" }, textColor: "#6e6e73",
+              fontFamily: '"JetBrains Mono", monospace', fontSize: 10 },
+    grid: {
+      vertLines: { color: "#eeeef2", style: 1 },
+      horzLines: { color: "#eeeef2", style: 1 },
     },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.1, bottom: 0.1 } },
+    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
+    crosshair: { mode: 0 },
+    handleScale:  { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
   });
+
+  // Handle resize — lightweight-charts doesn't auto-resize like Chart.js does
+  const ro = new ResizeObserver(() => {
+    if (el.clientWidth && el.clientHeight) {
+      chart.resize(el.clientWidth, el.clientHeight);
+    }
+  });
+  ro.observe(el);
+
+  return chart;
 }
+
+/**
+ * Render the price-history panel for market index `i`.
+ *
+ * Forces a full rebuild if the market changed or if the chart kind toggled;
+ * otherwise only the incremental `update()` path is taken.
+ */
+function drawHistoryChart(m) {
+  if (!window.LightweightCharts) {
+    // Fallback: render nothing rather than crash
+    console.warn("[OIEC] lightweight-charts not loaded");
+    return;
+  }
+
+  const idx = DATA.markets.indexOf(m);
+  const kindChanged   = historyChartState.kind !== historyChartState.kind;  // placeholder
+  const marketChanged = historyChartState.marketIdx !== idx;
+
+  // Build the raw (time, value) list from the market's history
+  const raw = m.history_timestamps.map((iso, k) => ({
+    time:  Math.floor(new Date(iso).getTime() / 1000),
+    value: m.history_prices[k],
+  }));
+  historyChartState.rawPoints = raw;
+
+  if (marketChanged || !historyChartState.chart) {
+    // Full rebuild
+    if (historyChartState.chart) {
+      historyChartState.chart.remove();
+      historyChartState.chart = null;
+      historyChartState.series = null;
+    }
+    historyChartState.chart = mountHistoryChart("d-chart-history");
+    historyChartState.marketIdx = idx;
+    historyChartState.lastTs = 0;
+    historyChartState.pendingCandle = null;
+    // Pick a candle bucket size ~5x the poll interval for sensible candles
+    const poll = (DATA._meta && DATA._meta.poll_interval_sec) || 3.0;
+    historyChartState.candleBucketSec = Math.max(10, Math.round(poll * 5));
+    attachHistorySeries(historyChartState.kind);
+  }
+
+  seedHistorySeries(raw);
+
+  // Sync the toggle UI to our state
+  document.querySelectorAll('.chart-toggle[data-target="d-chart-history"] button')
+    .forEach(btn => btn.classList.toggle("active", btn.dataset.kind === historyChartState.kind));
+}
+
+function attachHistorySeries(kind) {
+  if (!historyChartState.chart) return;
+  if (historyChartState.series) {
+    historyChartState.chart.removeSeries(historyChartState.series);
+    historyChartState.series = null;
+  }
+  if (kind === "candle") {
+    historyChartState.series = historyChartState.chart.addCandlestickSeries({
+      upColor:       "#1a56db",
+      downColor:     "#b91c1c",
+      wickUpColor:   "#1a56db",
+      wickDownColor: "#b91c1c",
+      borderVisible: false,
+      priceFormat: { type: "custom", minMove: 0.001, formatter: v => (v * 100).toFixed(1) + "¢" },
+    });
+  } else {
+    historyChartState.series = historyChartState.chart.addAreaSeries({
+      lineColor:   "#1a56db",
+      topColor:    "rgba(26, 86, 219, 0.22)",
+      bottomColor: "rgba(26, 86, 219, 0.00)",
+      lineWidth: 2,
+      priceFormat: { type: "custom", minMove: 0.001, formatter: v => (v * 100).toFixed(1) + "¢" },
+    });
+  }
+  historyChartState.kind = kind;
+}
+
+function seedHistorySeries(raw) {
+  if (!historyChartState.series || !raw.length) return;
+  if (historyChartState.kind === "candle") {
+    const candles = bucketIntoCandles(raw, historyChartState.candleBucketSec);
+    historyChartState.series.setData(candles);
+    // The last candle is the "pending" one — future .update() calls will amend it
+    historyChartState.pendingCandle = candles.length ? { ...candles[candles.length - 1] } : null;
+  } else {
+    historyChartState.series.setData(raw);
+  }
+  historyChartState.lastTs = raw[raw.length - 1].time;
+  historyChartState.chart.timeScale().fitContent();
+}
+
+/**
+ * Called from the live feed dispatcher when a new WS payload arrives and
+ * the user is on a Markets detail view. Instead of rebuilding, we just
+ * push the delta points via series.update().
+ */
+function updateHistoryChartIncremental(m) {
+  const idx = DATA.markets.indexOf(m);
+  if (idx !== historyChartState.marketIdx) {
+    // market switched — full rebuild
+    drawHistoryChart(m);
+    return;
+  }
+  if (!historyChartState.series) return;
+
+  const raw = m.history_timestamps.map((iso, k) => ({
+    time:  Math.floor(new Date(iso).getTime() / 1000),
+    value: m.history_prices[k],
+  }));
+  historyChartState.rawPoints = raw;
+
+  // Find new points (strictly greater timestamp than what we've drawn)
+  const newPts = raw.filter(p => p.time > historyChartState.lastTs);
+  if (!newPts.length) return;
+
+  if (historyChartState.kind === "candle") {
+    newPts.forEach(p => pushCandleTick(p));
+  } else {
+    newPts.forEach(p => historyChartState.series.update(p));
+  }
+  historyChartState.lastTs = newPts[newPts.length - 1].time;
+}
+
+/** Bucket raw tick data into OHLC candles of `bucketSec` seconds each. */
+function bucketIntoCandles(raw, bucketSec) {
+  const out = [];
+  let cur = null;
+  for (const p of raw) {
+    const bucket = Math.floor(p.time / bucketSec) * bucketSec;
+    if (!cur || cur.time !== bucket) {
+      if (cur) out.push(cur);
+      cur = { time: bucket, open: p.value, high: p.value, low: p.value, close: p.value };
+    } else {
+      cur.high  = Math.max(cur.high, p.value);
+      cur.low   = Math.min(cur.low,  p.value);
+      cur.close = p.value;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** Update (or create) the current live candle given one fresh tick. */
+function pushCandleTick(pt) {
+  const bucket = Math.floor(pt.time / historyChartState.candleBucketSec) * historyChartState.candleBucketSec;
+  const cur = historyChartState.pendingCandle;
+  if (!cur || cur.time !== bucket) {
+    // close out the old pending candle; start a new one
+    historyChartState.pendingCandle = {
+      time:  bucket,
+      open:  pt.value,
+      high:  pt.value,
+      low:   pt.value,
+      close: pt.value,
+    };
+  } else {
+    cur.high  = Math.max(cur.high, pt.value);
+    cur.low   = Math.min(cur.low,  pt.value);
+    cur.close = pt.value;
+  }
+  historyChartState.series.update(historyChartState.pendingCandle);
+}
+
+/* Wire up the Line/Candle toggle — called once, delegated via document. */
+(function initHistoryToggle() {
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(
+      '.chart-toggle[data-target="d-chart-history"] button'
+    );
+    if (!btn) return;
+    const kind = btn.dataset.kind;
+    if (kind === historyChartState.kind) return;
+    historyChartState.kind = kind;
+    // Re-attach the series in the new shape, then seed from our cached raw
+    attachHistorySeries(kind);
+    seedHistorySeries(historyChartState.rawPoints);
+    // Sync button state
+    document.querySelectorAll('.chart-toggle[data-target="d-chart-history"] button')
+      .forEach(b => b.classList.toggle("active", b.dataset.kind === kind));
+  });
+})();
 
 function drawBVIXChart(m) {
   destroy(marketCharts.bvix);
@@ -691,7 +885,6 @@ function drawBVIXTerm() {
    ===================================================================== */
 const arbState = { marketIdx: 0, capital: 100000, spreadOverride: null, scrubT: 149, playing: false, timer: null };
 let arbInit = false;
-let scrubChart = null;
 
 function renderArb() {
   if (!arbInit) {
@@ -781,16 +974,47 @@ function updateArb() {
   document.getElementById("arb-val-ha").textContent = fmt.years(m.tau);
 }
 
+/* Scrubber chart state — mirrors historyChartState but for the arb screen */
+const scrubChartState = {
+  marketIdx: -1,
+  chart:     null,
+  series:    null,
+  marker:    null,       // a line series with one point, acting as cursor
+  lastTs:    0,
+};
+
+function mountScrubChart() {
+  if (!window.LightweightCharts) return null;
+  const el = document.getElementById("scrub-chart");
+  el.innerHTML = "";
+  const chart = LightweightCharts.createChart(el, {
+    width: el.clientWidth, height: el.clientHeight || 200,
+    layout: { background: { color: "transparent" }, textColor: "#6e6e73",
+              fontFamily: '"JetBrains Mono", monospace', fontSize: 10 },
+    grid: {
+      vertLines: { color: "#eeeef2", style: 1 },
+      horzLines: { color: "#eeeef2", style: 1 },
+    },
+    rightPriceScale: { borderVisible: false },
+    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
+    crosshair: { mode: 0 },
+    handleScale: false, handleScroll: false,
+  });
+  const ro = new ResizeObserver(() => {
+    if (el.clientWidth && el.clientHeight) chart.resize(el.clientWidth, el.clientHeight);
+  });
+  ro.observe(el);
+  return chart;
+}
+
 function updateScrubber(rebuildChart = false) {
   const m = DATA.markets[arbState.marketIdx];
   const t = arbState.scrubT;
   const P = m.history_prices[t];
   const ts = m.history_timestamps[t];
 
-  // recompute ATM call/put at this historical P using the market's σ and τ
   const c = engine.call(P, Math.round(P * 20) / 20, m.sigma_hat, m.tau);
   const p = engine.put(P, Math.round(P * 20) / 20, m.sigma_hat, m.tau);
-  // simple BVIX proxy: σ · √τ scales with instantaneous variance P(1−P)
   const bvix = m.sigma_hat * Math.sqrt(m.tau) * Math.sqrt(Math.max(P * (1 - P), 1e-6)) * 2;
 
   document.getElementById("scrub-price").textContent = fmt.pctRaw(P, 1) + "¢";
@@ -799,52 +1023,50 @@ function updateScrubber(rebuildChart = false) {
   document.getElementById("scrub-bvix").textContent = bvix.toFixed(3);
   document.getElementById("scrub-time").textContent = fmt.dateLong(ts);
 
-  if (!window.Chart) return;
-  if (!scrubChart || rebuildChart) {
-    destroy(scrubChart);
-    const n = m.history_timestamps.length;
-    const step = Math.max(1, Math.floor(n / 8));
-    const labels = m.history_timestamps.map((t, i) => i % step === 0 ? fmt.date(t) : "");
-    scrubChart = new Chart(document.getElementById("scrub-chart"), {
-      type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "P(t)",
-            data: m.history_prices,
-            borderColor: C.call,
-            backgroundColor: (ctx) => {
-              const { ctx: cx, chartArea } = ctx.chart;
-              if (!chartArea) return C.fill;
-              const g = cx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
-              g.addColorStop(0, "rgba(26, 86, 219, 0.2)");
-              g.addColorStop(1, "rgba(26, 86, 219, 0)");
-              return g;
-            },
-            fill: true,
-            pointRadius: m.history_prices.map((_, i) => i === t ? 5 : 0),
-            pointBackgroundColor: C.call,
-            pointBorderColor: "#fff",
-            pointBorderWidth: 2,
-          },
-        ],
-      },
-      options: {
-        maintainAspectRatio: false, responsive: true,
-        animation: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { grid: { display: false }, ticks: { maxRotation: 0 } },
-          y: { min: 0, max: 1, ticks: { callback: v => (v * 100).toFixed(0) + "¢" } },
-        },
-      },
+  if (!window.LightweightCharts) return;
+
+  const raw = m.history_timestamps.map((iso, k) => ({
+    time: Math.floor(new Date(iso).getTime() / 1000),
+    value: m.history_prices[k],
+  }));
+
+  const marketChanged = scrubChartState.marketIdx !== arbState.marketIdx;
+  if (marketChanged || !scrubChartState.chart || rebuildChart) {
+    if (scrubChartState.chart) {
+      scrubChartState.chart.remove();
+      scrubChartState.chart = null;
+    }
+    scrubChartState.chart = mountScrubChart();
+    scrubChartState.marketIdx = arbState.marketIdx;
+    scrubChartState.series = scrubChartState.chart.addAreaSeries({
+      lineColor: "#1a56db",
+      topColor: "rgba(26, 86, 219, 0.22)",
+      bottomColor: "rgba(26, 86, 219, 0)",
+      lineWidth: 2,
+      priceFormat: { type: "custom", minMove: 0.001, formatter: v => (v * 100).toFixed(1) + "¢" },
     });
+    scrubChartState.series.setData(raw);
+    scrubChartState.lastTs = raw.length ? raw[raw.length - 1].time : 0;
+    scrubChartState.chart.timeScale().fitContent();
   } else {
-    // just move the highlighted point
-    scrubChart.data.datasets[0].pointRadius = m.history_prices.map((_, i) => i === t ? 5 : 0);
-    scrubChart.update("none");
+    // Incremental: push any new points
+    const newPts = raw.filter(r => r.time > scrubChartState.lastTs);
+    newPts.forEach(pt => scrubChartState.series.update(pt));
+    if (newPts.length) scrubChartState.lastTs = newPts[newPts.length - 1].time;
   }
+
+  // Move the cursor (priceLine) to the scrubbed-to point
+  if (scrubChartState.cursor) {
+    scrubChartState.series.removePriceLine(scrubChartState.cursor);
+  }
+  scrubChartState.cursor = scrubChartState.series.createPriceLine({
+    price: P,
+    color: "#1a56db",
+    lineWidth: 1,
+    lineStyle: 2,   // dashed
+    axisLabelVisible: true,
+    title: `t=${t}`,
+  });
 }
 
 function toggleScrubPlay() {
@@ -1022,13 +1244,28 @@ const liveFeed = (() => {
         break;
       case "/markets":
         renderMarkets();
-        // If detail pane is open for a given market, re-draw its charts
-        const open = document.getElementById("market-detail");
-        if (open && open.classList.contains("open")) {
+        // If detail pane is open for a given market, update its charts in place
+        const detailEl = document.getElementById("market-detail");
+        if (detailEl && detailEl.classList.contains("open")) {
           const titleEl = document.getElementById("d-title");
           const name = titleEl ? titleEl.textContent : "";
           const i = DATA.markets.findIndex(m => m.name === name);
-          if (i >= 0) openMarketDetail(i);
+          if (i >= 0) {
+            const m = DATA.markets[i];
+            // Update scalar readouts directly (no chart rebuild)
+            document.getElementById("d-price").innerHTML =
+              `${fmt.pctRaw(m.current_price, 1)}<small>¢</small>`;
+            document.getElementById("d-sigma").textContent = fmt.num(m.sigma_hat, 3);
+            document.getElementById("d-bvix-mf").textContent = fmt.num(m.bvix_model_free, 3);
+            document.getElementById("d-bvix-mb").textContent = fmt.num(m.bvix_model_based, 3);
+            document.getElementById("d-varswap").textContent = fmt.num(m.variance_swap_strike, 4);
+            // Strike charts (surface, bvix term) — rebuild, they're cheap and strike-indexed
+            drawSurfaceChart(m);
+            drawGreeksTable(m);
+            drawBVIXChart(m);
+            // History chart: INCREMENTAL, not a rebuild
+            updateHistoryChartIncremental(m);
+          }
         }
         break;
       case "/surface":

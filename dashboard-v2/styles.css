@@ -1172,3 +1172,28 @@ footer .formula {
   .hero-home { padding: var(--px-16) var(--px-4) var(--px-8); }
   .compression-card { padding: var(--px-8) var(--px-6); }
 }
+
+/* Chart type toggle (Line / Candle) next to panel titles */
+.chart-toggle {
+  display: inline-flex;
+  gap: 0;
+  margin-left: 12px;
+  border: 1px solid var(--line, #e5e5ea);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #f6f6f7;
+}
+.chart-toggle button {
+  padding: 3px 10px;
+  background: transparent;
+  border: none;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.chart-toggle button + button { border-left: 1px solid var(--line, #e5e5ea); }
+.chart-toggle button:hover { color: var(--ink); }
+.chart-toggle button.active { background: var(--accent, #1a56db); color: #fff; }
