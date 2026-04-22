@@ -1,18 +1,23 @@
 """
-polymarket.py — Polymarket Gamma API client (public, no authentication).
+polymarket.py — Polymarket Gamma API client.
 
-Two-phase model:
-    1. resolve(query, outcome_label) — called once at startup for each market.
-       Searches Gamma for matching markets, picks the most-liquid one whose
-       `outcomes` list contains the desired label, caches the (condition_id,
-       outcome_index) binding.
-    2. quote(resolved) — called every tick. Re-fetches the same market by
-       conditionId (stable identifier), returns the price for the bound
-       outcome index.
+Data model (verified against docs, April 2026):
+  - An EVENT is a top-level question. Slug e.g. "which-party-wins-2028-us-presidential-election".
+  - An event contains one or more MARKETS. Each market is a Yes/No question.
+    - "Single-outcome" events (e.g. "Fed rate cut by June?") have 1 market
+      with outcomes ["Yes", "No"].
+    - "Multi-outcome" events (e.g. "Which party wins?") have N markets, one
+      per option. The Democratic sub-market asks "Will Democratic win?",
+      the Republican sub-market asks "Will Republican win?", etc. Each
+      sub-market has outcomes ["Yes", "No"] and outcomePrices like ["0.61","0.39"].
 
-This fixes the bug where a single `slug` maps to a parent event containing
-multiple sub-markets (Dem / Rep / Other), and `outcomePrices[0]` isn't
-necessarily the outcome you actually want.
+To bind to a specific option you resolve the event, walk its `markets` array,
+match on `groupItemTitle` (the option label — "Democratic", "JD Vance", etc.)
+or fall back to `question`, then quote that sub-market's Yes price every tick.
+
+API surface:
+    resolve(event_slug, outcome_label) -> PolymarketBinding
+    quote(binding) -> PolymarketQuote
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import httpx
@@ -32,20 +37,18 @@ GAMMA_BASE = "https://gamma-api.polymarket.com"
 
 @dataclass
 class PolymarketBinding:
-    """Stable handle to a specific market outcome on Polymarket."""
-    query:         str
-    outcome_label: str
-    condition_id:  str
-    slug:          str
-    question:      str
-    outcome_index: int
-    outcomes:      list[str] = field(default_factory=list)
+    event_slug:    str
+    event_title:   str
+    outcome_label: str           # what the user asked for ("Democratic")
+    sub_market_title: str        # the actual sub-market title we matched
+    condition_id:  str           # conditionId of the sub-market, stable
+    sub_market_slug: str         # slug of the sub-market, for debugging
 
 
 @dataclass
 class PolymarketQuote:
     binding:     PolymarketBinding
-    yes_price:   float
+    yes_price:   float           # YES price of the bound sub-market, [0, 1]
     volume:      float
     timestamp_s: float
     raw:         dict
@@ -61,90 +64,106 @@ class PolymarketClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    # ---------- resolve (startup) -------------------------------------
+    # ---------- resolve ----------
 
     async def resolve(
         self,
-        query: str,
+        event_slug: str,
         outcome_label: str = "Yes",
-        fallback_slug: Optional[str] = None,
     ) -> Optional[PolymarketBinding]:
-        candidates = await self._search_markets(query)
-
-        # Always also include the explicit fallback slug if given — the search
-        # can rank a less-liquid match higher than the market we actually want.
-        if fallback_slug:
-            direct = await self._fetch_by_slug(fallback_slug)
-            if direct:
-                candidates = [direct] + [c for c in candidates if c.get("slug") != fallback_slug]
-
-        if not candidates:
-            # Last-ditch: treat the query as a slug
-            direct = await self._fetch_by_slug(query)
-            if direct:
-                candidates = [direct]
-
-        if not candidates:
-            log.warning("Polymarket resolve(%r): no markets found", query)
+        """Fetch the event, find the sub-market matching `outcome_label`,
+        return a binding to that sub-market."""
+        event = await self._fetch_event_by_slug(event_slug)
+        if event is None:
+            log.warning("Polymarket resolve: event slug %r not found", event_slug)
             return None
 
-        target = outcome_label.strip().lower()
-        scored: list[tuple[float, dict, int]] = []
-        for m in candidates:
-            if m.get("closed") is True or m.get("active") is False:
-                continue
-            outcomes = self._outcomes(m)
-            if not outcomes:
-                continue
-            idx = _match_outcome(outcomes, target)
-            if idx is None:
-                continue
-            vol = _as_float(m.get("volume24hr") or m.get("volumeNum") or m.get("volume") or 0)
-            scored.append((vol, m, idx))
+        event_title = event.get("title") or event.get("question") or event_slug
+        markets = event.get("markets") or []
+        if not markets:
+            log.warning("Polymarket resolve: event %r has no markets", event_slug)
+            return None
 
-        if not scored:
+        # If there's only one sub-market, it's a plain Yes/No event. The
+        # caller probably wants "Yes" regardless of what they passed.
+        if len(markets) == 1:
+            m = markets[0]
+            if m.get("closed"):
+                log.warning("Polymarket resolve: %r sole sub-market is closed", event_slug)
+                return None
+            return PolymarketBinding(
+                event_slug=event_slug,
+                event_title=event_title,
+                outcome_label=outcome_label,
+                sub_market_title=m.get("groupItemTitle") or m.get("question") or "",
+                condition_id=m.get("conditionId") or "",
+                sub_market_slug=m.get("slug", ""),
+            )
+
+        # Multi-outcome: match on groupItemTitle (option name) preferred,
+        # then fall back to question (full sub-market question).
+        target = outcome_label.strip().lower()
+        best = None
+        for m in markets:
+            if m.get("closed"):
+                continue
+            title = (m.get("groupItemTitle") or "").strip()
+            question = (m.get("question") or "").strip()
+            if title.lower() == target:
+                best = (100, m); break
+            if title.lower().startswith(target) or target.startswith(title.lower()):
+                if not best or best[0] < 80: best = (80, m)
+            elif target in title.lower() or (title and title.lower() in target):
+                if not best or best[0] < 60: best = (60, m)
+            elif target in question.lower():
+                if not best or best[0] < 40: best = (40, m)
+
+        if not best:
+            labels = [(m.get("groupItemTitle") or m.get("question") or "")[:60] for m in markets]
             log.warning(
-                "Polymarket resolve(%r, %r): no active market with matching outcome. "
-                "Candidates had these outcomes: %s",
-                query, outcome_label,
-                [self._outcomes(c) for c in candidates[:3]],
+                "Polymarket resolve: no sub-market in %r matches outcome %r. "
+                "Available options: %s",
+                event_slug, outcome_label, labels,
             )
             return None
 
-        scored.sort(key=lambda t: t[0], reverse=True)
-        vol, m, idx = scored[0]
-        outcomes = self._outcomes(m)
-        binding = PolymarketBinding(
-            query=query,
-            outcome_label=outcomes[idx],
-            condition_id=m.get("conditionId") or m.get("condition_id") or "",
-            slug=m.get("slug", ""),
-            question=m.get("question") or m.get("title") or query,
-            outcome_index=idx,
-            outcomes=outcomes,
+        score, m = best
+        return PolymarketBinding(
+            event_slug=event_slug,
+            event_title=event_title,
+            outcome_label=outcome_label,
+            sub_market_title=m.get("groupItemTitle") or m.get("question") or "",
+            condition_id=m.get("conditionId") or "",
+            sub_market_slug=m.get("slug", ""),
         )
-        log.info(
-            "Polymarket bound %r / %r -> slug=%s outcome=%r (idx %d) vol24h=%.0f",
-            query, outcome_label, binding.slug, binding.outcome_label, idx, vol,
-        )
-        return binding
 
-    # ---------- quote (every tick) ------------------------------------
+    # ---------- quote ----------
 
     async def quote(self, binding: PolymarketBinding) -> Optional[PolymarketQuote]:
+        # Re-fetch by conditionId (stable across slug changes)
         m = None
         if binding.condition_id:
-            m = await self._fetch_by_condition_id(binding.condition_id)
-        if m is None and binding.slug:
-            m = await self._fetch_by_slug(binding.slug)
+            m = await self._fetch_market_by_condition_id(binding.condition_id)
+        if m is None and binding.sub_market_slug:
+            m = await self._fetch_market_by_slug(binding.sub_market_slug)
         if m is None:
             return None
 
         prices = self._outcome_prices(m)
-        if not prices or binding.outcome_index >= len(prices):
+        outcomes = self._outcomes(m)
+        if not prices or not outcomes:
             return None
 
-        yes = max(0.001, min(0.999, prices[binding.outcome_index]))
+        # Always take the "Yes" side — index 0 if outcomes[0] == "Yes",
+        # else find "Yes" explicitly.
+        yes_idx = 0
+        for i, o in enumerate(outcomes):
+            if str(o).strip().lower() == "yes":
+                yes_idx = i; break
+        if yes_idx >= len(prices):
+            return None
+
+        yes = max(0.001, min(0.999, prices[yes_idx]))
         volume = _as_float(m.get("volumeNum") or m.get("volume") or 0)
         return PolymarketQuote(
             binding=binding,
@@ -154,26 +173,37 @@ class PolymarketClient:
             raw=m,
         )
 
-    # ---------- internals ---------------------------------------------
+    # ---------- internals ----------
 
-    async def _search_markets(self, query: str, limit: int = 20) -> list[dict]:
+    async def _fetch_event_by_slug(self, slug: str) -> Optional[dict]:
+        try:
+            r = await self._client.get(f"{GAMMA_BASE}/events", params={"slug": slug, "limit": 1})
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPError as e:
+            log.warning("Polymarket fetch_event(%s) failed: %s", slug, e)
+            return None
+        if isinstance(data, list):
+            return data[0] if data else None
+        if isinstance(data, dict) and "events" in data:
+            return (data["events"] or [None])[0]
+        return None
+
+    async def _fetch_market_by_condition_id(self, cid: str) -> Optional[dict]:
         try:
             r = await self._client.get(
                 f"{GAMMA_BASE}/markets",
-                params={"q": query, "limit": limit, "active": "true"},
+                params={"condition_ids": cid, "limit": 1},
             )
             r.raise_for_status()
             data = r.json()
         except httpx.HTTPError as e:
-            log.warning("Polymarket search(%r) failed: %s", query, e)
-            return []
-        if isinstance(data, dict) and "markets" in data:
-            return data["markets"]
-        if isinstance(data, list):
-            return data
-        return []
+            log.warning("Polymarket fetch_by_condition_id(%s...) failed: %s", cid[:12], e)
+            return None
+        items = data.get("markets") if isinstance(data, dict) else data
+        return items[0] if items else None
 
-    async def _fetch_by_slug(self, slug: str) -> Optional[dict]:
+    async def _fetch_market_by_slug(self, slug: str) -> Optional[dict]:
         try:
             r = await self._client.get(f"{GAMMA_BASE}/markets", params={"slug": slug, "limit": 1})
             r.raise_for_status()
@@ -182,34 +212,14 @@ class PolymarketClient:
             log.warning("Polymarket fetch_by_slug(%s) failed: %s", slug, e)
             return None
         items = data.get("markets") if isinstance(data, dict) else data
-        if not items:
-            return None
-        return items[0]
-
-    async def _fetch_by_condition_id(self, condition_id: str) -> Optional[dict]:
-        try:
-            r = await self._client.get(
-                f"{GAMMA_BASE}/markets",
-                params={"condition_ids": condition_id, "limit": 1},
-            )
-            r.raise_for_status()
-            data = r.json()
-        except httpx.HTTPError as e:
-            log.warning("Polymarket fetch_by_condition_id(%s) failed: %s", condition_id[:12], e)
-            return None
-        items = data.get("markets") if isinstance(data, dict) else data
-        if not items:
-            return None
-        return items[0]
+        return items[0] if items else None
 
     @staticmethod
     def _outcomes(m: dict) -> list[str]:
         raw = m.get("outcomes") or "[]"
         if isinstance(raw, str):
-            try:
-                return [str(x) for x in json.loads(raw)]
-            except json.JSONDecodeError:
-                return []
+            try: return [str(x) for x in json.loads(raw)]
+            except json.JSONDecodeError: return []
         if isinstance(raw, list):
             return [str(x) for x in raw]
         return []
@@ -218,29 +228,12 @@ class PolymarketClient:
     def _outcome_prices(m: dict) -> list[float]:
         raw = m.get("outcomePrices") or m.get("outcome_prices") or "[]"
         if isinstance(raw, str):
-            try:
-                return [float(x) for x in json.loads(raw)]
-            except (json.JSONDecodeError, TypeError, ValueError):
-                return []
+            try: return [float(x) for x in json.loads(raw)]
+            except (json.JSONDecodeError, ValueError, TypeError): return []
         if isinstance(raw, list):
-            try:
-                return [float(x) for x in raw]
-            except (TypeError, ValueError):
-                return []
+            try: return [float(x) for x in raw]
+            except (TypeError, ValueError): return []
         return []
-
-
-def _match_outcome(outcomes: list[str], target: str) -> Optional[int]:
-    lowered = [o.strip().lower() for o in outcomes]
-    if target in lowered:
-        return lowered.index(target)
-    for i, o in enumerate(lowered):
-        if o.startswith(target) or target.startswith(o):
-            return i
-    for i, o in enumerate(lowered):
-        if target in o or o in target:
-            return i
-    return None
 
 
 def _as_float(x) -> float:
@@ -255,22 +248,24 @@ if __name__ == "__main__":
 
     async def main():
         c = PolymarketClient()
-        for query, label in [
-            ("2028 presidential democrat", "Democrat"),
-            ("fed rate decision", "Yes"),
-            ("bitcoin 150000 2026", "Yes"),
-        ]:
-            b = await c.resolve(query, label)
+        cases = [
+            ("which-party-wins-2028-us-presidential-election", "Democratic"),
+            ("fed-decision-in-june-825",                        "No change"),
+            ("presidential-election-winner-2028",               "JD Vance"),
+            ("democratic-presidential-nominee-2028",            "Gavin Newsom"),
+        ]
+        for slug, label in cases:
+            print(f"\n== {slug} / {label!r} ==")
+            b = await c.resolve(slug, label)
             if b:
-                print(f"\n[{query!r} / {label!r}]")
-                print(f"  -> slug: {b.slug}")
-                print(f"  -> outcome: {b.outcome_label} (idx {b.outcome_index})")
-                print(f"  -> question: {b.question}")
+                print(f"  event    : {b.event_title}")
+                print(f"  bound to : {b.sub_market_title!r}")
+                print(f"  condId   : {b.condition_id[:18]}…")
                 q = await c.quote(b)
                 if q:
-                    print(f"  -> price: {q.yes_price:.3f}  volume: {q.volume:.0f}")
+                    print(f"  YES price: {q.yes_price:.3f}  vol={q.volume:.0f}")
             else:
-                print(f"\n[{query!r} / {label!r}] NOT RESOLVED")
+                print("  NOT RESOLVED")
         await c.close()
 
     asyncio.run(main())

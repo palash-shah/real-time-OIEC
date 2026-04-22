@@ -325,28 +325,80 @@ function openMarketDetail(i) {
 function destroy(c) { if (c) c.destroy(); }
 
 function drawSurfaceChart(m) {
-  destroy(marketCharts.surface);
   if (!window.Chart) return;
+  const labels = m.strikes.map(s => s.toFixed(2));
+
+  // If we already have a chart of this shape, just swap the data in place.
+  // This gives smooth animated transitions from one tick to the next
+  // rather than the destroy-and-rebuild flash.
+  if (marketCharts.surface && marketCharts.surface._oiecMarketIdx === DATA.markets.indexOf(m)) {
+    const c = marketCharts.surface;
+    c.data.labels = labels;
+    c.data.datasets[0].data = m.call_prices;
+    c.data.datasets[1].data = m.put_prices;
+    // update ATM marker position
+    c.options.plugins.annotation = buildSurfaceAnnotations(m);
+    c.update("active");
+    return;
+  }
+
+  // Fresh build (different market or first draw)
+  destroy(marketCharts.surface);
   const ctx = document.getElementById("d-chart-surface");
   marketCharts.surface = new Chart(ctx, {
     type: "line",
     data: {
-      labels: m.strikes.map(s => s.toFixed(2)),
+      labels,
       datasets: [
-        { label: "Call", data: m.call_prices, borderColor: C.call, backgroundColor: C.callF, fill: true, pointRadius: 0 },
-        { label: "Put",  data: m.put_prices,  borderColor: C.put,  backgroundColor: C.putF,  fill: true, pointRadius: 0, borderDash: [5, 3] },
+        { label: "Call", data: m.call_prices, borderColor: C.call,
+          backgroundColor: C.callF, fill: true, pointRadius: 0, borderWidth: 2, tension: 0.15 },
+        { label: "Put",  data: m.put_prices,  borderColor: C.put,
+          backgroundColor: C.putF,  fill: true, pointRadius: 0, borderWidth: 2, borderDash: [5, 3], tension: 0.15 },
       ],
     },
     options: {
       maintainAspectRatio: false, responsive: true,
       interaction: { mode: "index", intersect: false },
-      plugins: { legend: { position: "top", align: "end", labels: { usePointStyle: true, pointStyle: "line" } } },
+      animation: { duration: 400, easing: "easeOutQuart" },
+      plugins: {
+        legend: { position: "top", align: "end", labels: { usePointStyle: true, pointStyle: "line" } },
+        tooltip: {
+          callbacks: {
+            title: items => `K = ${items[0].label}   (spot ${(m.current_price * 100).toFixed(1)}¢)`,
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(4)}`,
+          },
+        },
+        annotation: buildSurfaceAnnotations(m),
+      },
       scales: {
         x: { title: { display: true, text: "strike K", color: "#a1a1a6", font: { size: 10 } } },
-        y: { title: { display: true, text: "premium",  color: "#a1a1a6", font: { size: 10 } }, ticks: { callback: v => v.toFixed(2) } },
+        y: { title: { display: true, text: "premium",  color: "#a1a1a6", font: { size: 10 } },
+             ticks: { callback: v => v.toFixed(2) } },
       },
     },
   });
+  marketCharts.surface._oiecMarketIdx = DATA.markets.indexOf(m);
+}
+
+/** Annotations for the option surface: vertical line at spot price */
+function buildSurfaceAnnotations(m) {
+  // Find the nearest strike to spot for x-axis positioning (category scale)
+  const atmIdx = m.strikes.reduce(
+    (best, s, i) => Math.abs(s - m.current_price) < Math.abs(m.strikes[best] - m.current_price) ? i : best, 0
+  );
+  // Chart.js annotation plugin may not be loaded — this object is harmless if ignored
+  return {
+    annotations: {
+      atmLine: {
+        type: "line",
+        xMin: atmIdx, xMax: atmIdx,
+        borderColor: "#1a56db",
+        borderWidth: 1, borderDash: [4, 4],
+        label: { display: true, content: "spot", position: "end",
+                 backgroundColor: "rgba(26,86,219,0.92)", color: "#fff", padding: 3, font: { size: 9 } },
+      },
+    },
+  };
 }
 
 function drawGreeksTable(m) {
@@ -390,31 +442,46 @@ const historyChartState = {
   rawPoints:   [],          // the history as (ts_sec, price) for rebuilds
 };
 
+/* Chart color palette — Bloomberg-aesthetic tuned for Apple off-white bg */
+const LWC_COLORS = {
+  up:        "#047857",   // green — close > prevClose
+  down:      "#b91c1c",   // red — close < prevClose
+  flat:      "#a1a1a6",   // grey — unchanged
+  line:      "#1a56db",   // editorial blue
+  lineSoft:  "rgba(26, 86, 219, 0.22)",
+  sigma:     "#7c3aed",   // violet
+  bvix:      "#c2410c",   // burnt orange
+  grid:      "#eeeef2",
+  text:      "#6e6e73",
+};
+
 function mountHistoryChart(containerId) {
   if (!window.LightweightCharts) return null;
   const el = document.getElementById(containerId);
   el.innerHTML = "";
   const chart = LightweightCharts.createChart(el, {
     width:  el.clientWidth,
-    height: el.clientHeight || 260,
-    layout: { background: { color: "transparent" }, textColor: "#6e6e73",
-              fontFamily: '"JetBrains Mono", monospace', fontSize: 10 },
-    grid: {
-      vertLines: { color: "#eeeef2", style: 1 },
-      horzLines: { color: "#eeeef2", style: 1 },
+    height: el.clientHeight || 300,
+    layout: { background: { color: "transparent" }, textColor: LWC_COLORS.text,
+              fontFamily: '"JetBrains Mono", monospace', fontSize: 10.5 },
+    grid:   { vertLines: { color: LWC_COLORS.grid, style: 1 },
+              horzLines: { color: LWC_COLORS.grid, style: 1 } },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.10, bottom: 0.22 }},
+    // Left scale for the secondary (σ̂) series
+    leftPriceScale:  { borderVisible: false, scaleMargins: { top: 0.10, bottom: 0.22 }, visible: true },
+    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false,
+                 rightOffset: 4, barSpacing: 6, minBarSpacing: 2 },
+    crosshair: {
+      mode: 1,   // normal — follows cursor, not the nearest data point
+      vertLine: { color: "#c7c7cc", width: 1, style: 3, labelBackgroundColor: LWC_COLORS.line },
+      horzLine: { color: "#c7c7cc", width: 1, style: 3, labelBackgroundColor: LWC_COLORS.line },
     },
-    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.1, bottom: 0.1 } },
-    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
-    crosshair: { mode: 0 },
     handleScale:  { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
   });
 
-  // Handle resize — lightweight-charts doesn't auto-resize like Chart.js does
   const ro = new ResizeObserver(() => {
-    if (el.clientWidth && el.clientHeight) {
-      chart.resize(el.clientWidth, el.clientHeight);
-    }
+    if (el.clientWidth && el.clientHeight) chart.resize(el.clientWidth, el.clientHeight);
   });
   ro.observe(el);
 
@@ -422,44 +489,49 @@ function mountHistoryChart(containerId) {
 }
 
 /**
- * Render the price-history panel for market index `i`.
- *
- * Forces a full rebuild if the market changed or if the chart kind toggled;
- * otherwise only the incremental `update()` path is taken.
+ * Render the price-history panel for market m.
+ * Full rebuild when market changes; otherwise delegated to updateHistoryChartIncremental.
  */
 function drawHistoryChart(m) {
   if (!window.LightweightCharts) {
-    // Fallback: render nothing rather than crash
     console.warn("[OIEC] lightweight-charts not loaded");
     return;
   }
 
   const idx = DATA.markets.indexOf(m);
-  const kindChanged   = historyChartState.kind !== historyChartState.kind;  // placeholder
-  const marketChanged = historyChartState.marketIdx !== idx;
-
-  // Build the raw (time, value) list from the market's history
   const raw = m.history_timestamps.map((iso, k) => ({
     time:  Math.floor(new Date(iso).getTime() / 1000),
     value: m.history_prices[k],
   }));
   historyChartState.rawPoints = raw;
 
+  // Sigma history is a constant per payload, so derive a "sigma-over-history"
+  // proxy by sliding a window. The backend doesn't ship historical σ̂, so we
+  // compute a local rolling σ̂ over the same window here. This gives an
+  // impression of vol-regime shifts that an investor will actually notice.
+  historyChartState.sigmaSeries = computeRollingSigma(raw, 20);
+  historyChartState.bvixSeries  = historyChartState.sigmaSeries.map((s, i) => ({
+    time:  s.time,
+    value: s.value * Math.sqrt(m.tau) * Math.sqrt(Math.max(raw[i].value * (1 - raw[i].value), 1e-6)) * 2,
+  }));
+
+  const marketChanged = historyChartState.marketIdx !== idx;
   if (marketChanged || !historyChartState.chart) {
-    // Full rebuild
     if (historyChartState.chart) {
       historyChartState.chart.remove();
       historyChartState.chart = null;
       historyChartState.series = null;
+      historyChartState.sigmaSeries_api = null;
+      historyChartState.bvixSeries_api = null;
     }
     historyChartState.chart = mountHistoryChart("d-chart-history");
     historyChartState.marketIdx = idx;
     historyChartState.lastTs = 0;
     historyChartState.pendingCandle = null;
-    // Pick a candle bucket size ~5x the poll interval for sensible candles
-    const poll = (DATA._meta && DATA._meta.poll_interval_sec) || 3.0;
-    historyChartState.candleBucketSec = Math.max(10, Math.round(poll * 5));
+    // Adaptive bucket size: aim for ~60 candles visible
+    historyChartState.candleBucketSec = adaptiveBucketSec(raw, 60);
     attachHistorySeries(historyChartState.kind);
+    attachCrosshairReadout();
   }
 
   seedHistorySeries(raw);
@@ -469,56 +541,124 @@ function drawHistoryChart(m) {
     .forEach(btn => btn.classList.toggle("active", btn.dataset.kind === historyChartState.kind));
 }
 
+/** Rolling σ̂ proxy — compute σ from consecutive-log-return windows over the raw history. */
+function computeRollingSigma(raw, windowN) {
+  const out = [];
+  if (raw.length < 2) return out;
+  // dt_years between consecutive points
+  const dts = [];
+  for (let i = 1; i < raw.length; i++) {
+    dts.push(Math.max(1, raw[i].time - raw[i - 1].time) / (365.25 * 86400));
+  }
+  const avgDt = dts.reduce((a, b) => a + b, 0) / dts.length;
+  // Jacobi: dP = σ · √(P(1-P)) · dW, so σ ≈ stdev(dP / √(P(1-P))) / √dt
+  const z = [];
+  for (let i = 1; i < raw.length; i++) {
+    const p = raw[i - 1].value;
+    const dP = raw[i].value - raw[i - 1].value;
+    const s = Math.sqrt(Math.max(p * (1 - p), 1e-6));
+    z.push(dP / s);
+  }
+  for (let i = 0; i < raw.length; i++) {
+    const start = Math.max(0, Math.min(z.length - 1, i - windowN));
+    const end   = Math.max(start + 1, Math.min(z.length, i + 1));
+    const slice = z.slice(start, end);
+    const mean  = slice.reduce((a, b) => a + b, 0) / Math.max(1, slice.length);
+    const varz  = slice.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, slice.length);
+    const sig   = Math.sqrt(varz) / Math.sqrt(avgDt);
+    out.push({ time: raw[i].time, value: Number.isFinite(sig) ? sig : 0 });
+  }
+  return out;
+}
+
+/** Adaptive candle bucket — target ~N visible candles across the full span */
+function adaptiveBucketSec(raw, targetCount) {
+  if (raw.length < 2) return 60;
+  const span = raw[raw.length - 1].time - raw[0].time;
+  return Math.max(10, Math.round(span / targetCount));
+}
+
 function attachHistorySeries(kind) {
   if (!historyChartState.chart) return;
+  // Clear any existing series on the chart so we can rebuild the stack
   if (historyChartState.series) {
     historyChartState.chart.removeSeries(historyChartState.series);
     historyChartState.series = null;
   }
+  if (historyChartState.sigmaSeries_api) {
+    historyChartState.chart.removeSeries(historyChartState.sigmaSeries_api);
+    historyChartState.sigmaSeries_api = null;
+  }
+
   if (kind === "candle") {
     historyChartState.series = historyChartState.chart.addCandlestickSeries({
-      upColor:       "#1a56db",
-      downColor:     "#b91c1c",
-      wickUpColor:   "#1a56db",
-      wickDownColor: "#b91c1c",
+      upColor:       LWC_COLORS.up,
+      downColor:     LWC_COLORS.down,
+      wickUpColor:   LWC_COLORS.up,
+      wickDownColor: LWC_COLORS.down,
       borderVisible: false,
+      priceScaleId:  "right",
       priceFormat: { type: "custom", minMove: 0.001, formatter: v => (v * 100).toFixed(1) + "¢" },
     });
   } else {
     historyChartState.series = historyChartState.chart.addAreaSeries({
-      lineColor:   "#1a56db",
-      topColor:    "rgba(26, 86, 219, 0.22)",
+      lineColor:   LWC_COLORS.line,
+      topColor:    LWC_COLORS.lineSoft,
       bottomColor: "rgba(26, 86, 219, 0.00)",
       lineWidth: 2,
+      priceScaleId:  "right",
       priceFormat: { type: "custom", minMove: 0.001, formatter: v => (v * 100).toFixed(1) + "¢" },
     });
   }
+
+  // Rolling σ̂ overlay — subtle, left-axis, always visible regardless of mode
+  historyChartState.sigmaSeries_api = historyChartState.chart.addLineSeries({
+    color:       LWC_COLORS.sigma,
+    lineWidth:   1,
+    lineStyle:   2,          // dashed
+    priceScaleId: "left",
+    lastValueVisible: false,
+    priceLineVisible: false,
+    priceFormat: { type: "custom", minMove: 0.01, formatter: v => "σ " + v.toFixed(2) },
+  });
   historyChartState.kind = kind;
 }
 
 function seedHistorySeries(raw) {
   if (!historyChartState.series || !raw.length) return;
+
   if (historyChartState.kind === "candle") {
     const candles = bucketIntoCandles(raw, historyChartState.candleBucketSec);
+    // Color each candle based on close vs previous close — that's the "direction"
+    // the user actually perceives. When open==close within a bucket (sparse data),
+    // this still gives a meaningful green/red signal.
+    let prevClose = candles[0] ? candles[0].open : 0;
+    for (const c of candles) {
+      const up = c.close > prevClose + 1e-9;
+      const down = c.close < prevClose - 1e-9;
+      c.color       = up ? LWC_COLORS.up : down ? LWC_COLORS.down : LWC_COLORS.flat;
+      c.wickColor   = c.color;
+      c.borderColor = c.color;
+      prevClose = c.close;
+    }
     historyChartState.series.setData(candles);
-    // The last candle is the "pending" one — future .update() calls will amend it
     historyChartState.pendingCandle = candles.length ? { ...candles[candles.length - 1] } : null;
+    historyChartState.prevClose = prevClose;
   } else {
     historyChartState.series.setData(raw);
   }
+
+  if (historyChartState.sigmaSeries_api && historyChartState.sigmaSeries.length) {
+    historyChartState.sigmaSeries_api.setData(historyChartState.sigmaSeries);
+  }
+
   historyChartState.lastTs = raw[raw.length - 1].time;
   historyChartState.chart.timeScale().fitContent();
 }
 
-/**
- * Called from the live feed dispatcher when a new WS payload arrives and
- * the user is on a Markets detail view. Instead of rebuilding, we just
- * push the delta points via series.update().
- */
 function updateHistoryChartIncremental(m) {
   const idx = DATA.markets.indexOf(m);
   if (idx !== historyChartState.marketIdx) {
-    // market switched — full rebuild
     drawHistoryChart(m);
     return;
   }
@@ -529,8 +669,9 @@ function updateHistoryChartIncremental(m) {
     value: m.history_prices[k],
   }));
   historyChartState.rawPoints = raw;
+  // Recompute σ̂ incrementally — the whole series; cheap since raw is ≤150
+  historyChartState.sigmaSeries = computeRollingSigma(raw, 20);
 
-  // Find new points (strictly greater timestamp than what we've drawn)
   const newPts = raw.filter(p => p.time > historyChartState.lastTs);
   if (!newPts.length) return;
 
@@ -539,10 +680,17 @@ function updateHistoryChartIncremental(m) {
   } else {
     newPts.forEach(p => historyChartState.series.update(p));
   }
+
+  // σ̂ line: just push the matching new σ̂ points
+  if (historyChartState.sigmaSeries_api) {
+    const sigmaNew = historyChartState.sigmaSeries
+      .filter(s => s.time > historyChartState.lastTs);
+    sigmaNew.forEach(s => historyChartState.sigmaSeries_api.update(s));
+  }
+
   historyChartState.lastTs = newPts[newPts.length - 1].time;
 }
 
-/** Bucket raw tick data into OHLC candles of `bucketSec` seconds each. */
 function bucketIntoCandles(raw, bucketSec) {
   const out = [];
   let cur = null;
@@ -561,28 +709,85 @@ function bucketIntoCandles(raw, bucketSec) {
   return out;
 }
 
-/** Update (or create) the current live candle given one fresh tick. */
 function pushCandleTick(pt) {
   const bucket = Math.floor(pt.time / historyChartState.candleBucketSec) * historyChartState.candleBucketSec;
   const cur = historyChartState.pendingCandle;
   if (!cur || cur.time !== bucket) {
-    // close out the old pending candle; start a new one
+    // close out the old pending; open a new one. Color previous by its close vs prior prevClose.
+    if (cur) historyChartState.prevClose = cur.close;
+    const prev = historyChartState.prevClose ?? pt.value;
+    const up   = pt.value > prev + 1e-9;
+    const down = pt.value < prev - 1e-9;
+    const color = up ? LWC_COLORS.up : down ? LWC_COLORS.down : LWC_COLORS.flat;
     historyChartState.pendingCandle = {
       time:  bucket,
-      open:  pt.value,
-      high:  pt.value,
-      low:   pt.value,
-      close: pt.value,
+      open:  pt.value, high: pt.value, low: pt.value, close: pt.value,
+      color, wickColor: color, borderColor: color,
     };
   } else {
     cur.high  = Math.max(cur.high, pt.value);
     cur.low   = Math.min(cur.low,  pt.value);
     cur.close = pt.value;
+    // Refresh color as intraday changes accumulate
+    const prev = historyChartState.prevClose ?? cur.open;
+    const up   = cur.close > prev + 1e-9;
+    const down = cur.close < prev - 1e-9;
+    const color = up ? LWC_COLORS.up : down ? LWC_COLORS.down : LWC_COLORS.flat;
+    cur.color = cur.wickColor = cur.borderColor = color;
   }
   historyChartState.series.update(historyChartState.pendingCandle);
 }
 
-/* Wire up the Line/Candle toggle — called once, delegated via document. */
+/* -- Crosshair readout: shows P, σ̂, BVIX at the hovered time -- */
+function attachCrosshairReadout() {
+  if (!historyChartState.chart) return;
+  let readout = document.getElementById("history-crosshair-readout");
+  if (!readout) {
+    readout = document.createElement("div");
+    readout.id = "history-crosshair-readout";
+    readout.className = "crosshair-readout";
+    const container = document.getElementById("d-chart-history");
+    if (container) container.parentNode.insertBefore(readout, container);
+  }
+  historyChartState.chart.subscribeCrosshairMove((param) => {
+    if (!param || !param.time || !param.seriesData || param.seriesData.size === 0) {
+      const last = historyChartState.rawPoints[historyChartState.rawPoints.length - 1];
+      const sig  = historyChartState.sigmaSeries[historyChartState.sigmaSeries.length - 1];
+      if (!last) return;
+      readout.innerHTML = formatReadout(last.time, last.value, sig ? sig.value : 0, "now");
+      return;
+    }
+    // Get values at hovered time
+    let priceVal = null, sigmaVal = 0;
+    param.seriesData.forEach((v, series) => {
+      if (series === historyChartState.series) {
+        priceVal = v.value ?? v.close;
+      } else if (series === historyChartState.sigmaSeries_api) {
+        sigmaVal = v.value ?? 0;
+      }
+    });
+    if (priceVal === null) return;
+    readout.innerHTML = formatReadout(param.time, priceVal, sigmaVal, "hover");
+  });
+}
+
+function formatReadout(time, price, sigma, mode) {
+  const d = new Date(time * 1000);
+  const tag = mode === "now" ? "LIVE" : "at";
+  const m = DATA.markets[historyChartState.marketIdx];
+  const tau = m ? m.tau : 0.25;
+  const instVar = Math.max(price * (1 - price), 1e-6);
+  const bvix = sigma * Math.sqrt(tau) * Math.sqrt(instVar) * 2;
+  return `
+    <div class="cr-tag">${tag}</div>
+    <div class="cr-time">${d.toUTCString().slice(5, 22)} UTC</div>
+    <span class="cr-kv"><span class="k">P</span><span class="v">${(price * 100).toFixed(2)}¢</span></span>
+    <span class="cr-kv"><span class="k">σ̂</span><span class="v">${sigma.toFixed(3)}</span></span>
+    <span class="cr-kv"><span class="k">BVIX</span><span class="v">${bvix.toFixed(3)}</span></span>
+  `;
+}
+
+/* Wire up the Line/Candle toggle — delegated via document */
 (function initHistoryToggle() {
   document.addEventListener("click", (e) => {
     const btn = e.target.closest(
@@ -592,46 +797,65 @@ function pushCandleTick(pt) {
     const kind = btn.dataset.kind;
     if (kind === historyChartState.kind) return;
     historyChartState.kind = kind;
-    // Re-attach the series in the new shape, then seed from our cached raw
     attachHistorySeries(kind);
     seedHistorySeries(historyChartState.rawPoints);
-    // Sync button state
     document.querySelectorAll('.chart-toggle[data-target="d-chart-history"] button')
       .forEach(b => b.classList.toggle("active", b.dataset.kind === kind));
   });
 })();
 
 function drawBVIXChart(m) {
-  destroy(marketCharts.bvix);
   if (!window.Chart) return;
   const tMax = Math.min(m.time_to_resolution_years, 1.0);
   const horizons = [];
   for (let i = 1; i <= 20; i++) horizons.push(tMax * (i / 20));
+  const labels = horizons.map(t => fmt.years(t));
 
-  // scale model / free series so at τ we match the stored BVIX values
   const baseMB = m.bvix_model_based / (m.sigma_hat * Math.sqrt(m.tau));
   const baseMF = m.bvix_model_free  / (m.sigma_hat * Math.sqrt(m.tau));
   const mb = horizons.map(t => m.sigma_hat * Math.sqrt(t) * baseMB);
   const mf = horizons.map(t => m.sigma_hat * Math.sqrt(t) * baseMF);
 
+  // Smooth in-place update if chart already exists for this market
+  if (marketCharts.bvix && marketCharts.bvix._oiecMarketIdx === DATA.markets.indexOf(m)) {
+    const c = marketCharts.bvix;
+    c.data.labels = labels;
+    c.data.datasets[0].data = mb;
+    c.data.datasets[1].data = mf;
+    c.update("active");
+    return;
+  }
+
+  destroy(marketCharts.bvix);
   marketCharts.bvix = new Chart(document.getElementById("d-chart-bvix"), {
     type: "line",
     data: {
-      labels: horizons.map(t => fmt.years(t)),
+      labels,
       datasets: [
-        { label: "Model-based", data: mb, borderColor: C.mb, backgroundColor: C.mbF, fill: true },
-        { label: "Model-free",  data: mf, borderColor: C.mf, borderDash: [4, 3], fill: false },
+        { label: "Model-based", data: mb, borderColor: C.mb, backgroundColor: C.mbF,
+          fill: true, borderWidth: 2, pointRadius: 0, tension: 0.2 },
+        { label: "Model-free",  data: mf, borderColor: C.mf, borderDash: [4, 3],
+          fill: false, borderWidth: 2, pointRadius: 0, tension: 0.2 },
       ],
     },
     options: {
       maintainAspectRatio: false, responsive: true,
-      plugins: { legend: { position: "top", align: "end", labels: { usePointStyle: true, pointStyle: "line" } } },
+      animation: { duration: 400, easing: "easeOutQuart" },
+      plugins: {
+        legend: { position: "top", align: "end", labels: { usePointStyle: true, pointStyle: "line" } },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(3)}`,
+          },
+        },
+      },
       scales: {
         x: { title: { display: true, text: "horizon τ", color: "#a1a1a6", font: { size: 10 } } },
         y: { ticks: { callback: v => v.toFixed(2) } },
       },
     },
   });
+  marketCharts.bvix._oiecMarketIdx = DATA.markets.indexOf(m);
 }
 
 /* =====================================================================
@@ -819,59 +1043,122 @@ function renderBVIX() {
 
 function drawBVIXCross() {
   if (!window.Chart) return;
-  destroy(bvixInit.cross);
-  const labels = DATA.markets.map((m, i) => "M.0" + (i + 1));
+
+  // Sort markets by model-free BVIX descending, so the eye goes to the most
+  // volatile market first. Keep a mapping back to the original index for
+  // tooltip display.
+  const sorted = DATA.markets
+    .map((m, i) => ({ m, i }))
+    .sort((a, b) => b.m.bvix_model_free - a.m.bvix_model_free);
+
+  const labels    = sorted.map(({ i }) => "M.0" + (i + 1));
+  const dataMF    = sorted.map(({ m }) => m.bvix_model_free);
+  const dataMB    = sorted.map(({ m }) => m.bvix_model_based);
+  const sortedIdx = sorted.map(({ i }) => i);
+
+  if (bvixInit.cross) {
+    const c = bvixInit.cross;
+    c.data.labels            = labels;
+    c.data.datasets[0].data  = dataMF;
+    c.data.datasets[1].data  = dataMB;
+    c._oiecSortedIdx         = sortedIdx;
+    c.update("active");
+    return;
+  }
+
   bvixInit.cross = new Chart(document.getElementById("bvix-chart-cross"), {
     type: "bar",
     data: {
       labels,
       datasets: [
-        { label: "Model-free", data: DATA.markets.map(m => m.bvix_model_free), backgroundColor: C.put, borderRadius: 6, barThickness: 28 },
-        { label: "Model-based", data: DATA.markets.map(m => m.bvix_model_based), backgroundColor: C.mb, borderRadius: 6, barThickness: 28 },
+        { label: "Model-free",  data: dataMF, backgroundColor: C.put, borderRadius: 6, barThickness: 28 },
+        { label: "Model-based", data: dataMB, backgroundColor: C.mb,  borderRadius: 6, barThickness: 28 },
       ],
     },
     options: {
       maintainAspectRatio: false, responsive: true,
+      animation: { duration: 500, easing: "easeOutQuart" },
       plugins: {
         legend: { position: "top", align: "end", labels: { usePointStyle: true, pointStyle: "rect" } },
         tooltip: {
           callbacks: {
             title: items => {
-              const i = items[0].dataIndex;
-              return DATA.markets[i].platform + " · " + DATA.markets[i].name.slice(0, 40);
+              const sortedI = items[0].dataIndex;
+              const origI = bvixInit.cross._oiecSortedIdx[sortedI];
+              const m = DATA.markets[origI];
+              return m.platform + " · " + m.name.slice(0, 50);
+            },
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(3)}`,
+            afterBody: items => {
+              const sortedI = items[0].dataIndex;
+              const origI = bvixInit.cross._oiecSortedIdx[sortedI];
+              const m = DATA.markets[origI];
+              return [
+                `σ̂: ${m.sigma_hat.toFixed(3)}`,
+                `τ: ${fmt.years(m.tau)}`,
+                `TTR: ${fmt.years(m.time_to_resolution_years)}`,
+              ];
             },
           },
         },
       },
-      scales: { y: { ticks: { callback: v => v.toFixed(2) }, title: { display: true, text: "BVIX" } } },
+      scales: {
+        y: { ticks: { callback: v => v.toFixed(2) }, title: { display: true, text: "BVIX" } },
+      },
     },
   });
+  bvixInit.cross._oiecSortedIdx = sortedIdx;
 }
 
 function drawBVIXTerm() {
   if (!window.Chart) return;
-  destroy(bvixInit.term);
-  // One consistent horizon grid across markets
   const horizons = [];
   for (let i = 1; i <= 20; i++) horizons.push(0.05 * i);
   const palette = [C.call, C.put, C.mb, "#6e6e73"];
+  const labels  = horizons.map(t => fmt.years(t));
   const datasets = DATA.markets.map((m, i) => {
     const baseMF = m.bvix_model_free / (m.sigma_hat * Math.sqrt(m.tau));
     return {
-      label: "M.0" + (i + 1),
-      data: horizons.map(t => m.sigma_hat * Math.sqrt(t) * baseMF),
-      borderColor: palette[i % palette.length],
-      backgroundColor: "transparent",
-      fill: false,
-      pointRadius: 0,
+      label:           "M.0" + (i + 1),
+      data:            horizons.map(t => m.sigma_hat * Math.sqrt(t) * baseMF),
+      borderColor:     palette[i % palette.length],
+      backgroundColor: palette[i % palette.length] + "18",
+      fill:            false,
+      pointRadius:     0,
+      borderWidth:     2,
+      tension:         0.2,
     };
   });
+
+  if (bvixInit.term) {
+    const c = bvixInit.term;
+    c.data.labels   = labels;
+    c.data.datasets.forEach((ds, idx) => {
+      ds.data = datasets[idx] ? datasets[idx].data : ds.data;
+    });
+    c.update("active");
+    return;
+  }
+
   bvixInit.term = new Chart(document.getElementById("bvix-chart-term"), {
     type: "line",
-    data: { labels: horizons.map(t => fmt.years(t)), datasets },
+    data: { labels, datasets },
     options: {
       maintainAspectRatio: false, responsive: true,
-      plugins: { legend: { position: "top", align: "end", labels: { usePointStyle: true, pointStyle: "line" } } },
+      animation: { duration: 500, easing: "easeOutQuart" },
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "top", align: "end", labels: { usePointStyle: true, pointStyle: "line" } },
+        tooltip: {
+          callbacks: {
+            title: items => `horizon ${items[0].label}`,
+            label: ctx => {
+              const m = DATA.markets[ctx.datasetIndex];
+              return `${m.name.slice(0, 40)}: ${ctx.parsed.y.toFixed(3)}`;
+            },
+          },
+        },
+      },
       scales: {
         x: { title: { display: true, text: "horizon τ" }, ticks: { maxTicksLimit: 8 } },
         y: { ticks: { callback: v => v.toFixed(2) }, title: { display: true, text: "model-free BVIX" } },

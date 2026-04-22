@@ -102,14 +102,18 @@ class Poller:
         """Resolve each market to stable bindings on the configured venues."""
         for m in MARKETS:
             # Polymarket
-            if m.poly_query and self.poly:
+            if m.poly_slug and self.poly:
                 try:
-                    b = await self.poly.resolve(
-                        m.poly_query,
-                        m.poly_outcome,
-                        fallback_slug=m.poly_slug,
-                    )
+                    b = await self.poly.resolve(m.poly_slug, m.poly_outcome)
                     self.poly_bind[m.idx] = b
+                    if b:
+                        log.info(
+                            "Polymarket bound %r -> event=%r bound-to=%r condId=%s…",
+                            m.name, b.event_title, b.sub_market_title,
+                            b.condition_id[:18],
+                        )
+                    else:
+                        log.warning("Polymarket failed to resolve %r", m.name)
                 except Exception as e:
                     log.warning("poly resolve failed for %r: %s", m.name, e)
                     self.poly_bind[m.idx] = None
@@ -239,8 +243,9 @@ class Poller:
                 "_source": {
                     "polymarket": p_quote.yes_price if p_quote else None,
                     "kalshi":     k_quote.yes_price if k_quote else None,
-                    "poly_outcome": p_quote.binding.outcome_label if p_quote else None,
-                    "poly_slug":    p_quote.binding.slug if p_quote else None,
+                    "poly_outcome":  p_quote.binding.sub_market_title if p_quote else None,
+                    "poly_slug":     p_quote.binding.sub_market_slug if p_quote else None,
+                    "poly_event":    p_quote.binding.event_slug if p_quote else None,
                 },
             })
 
