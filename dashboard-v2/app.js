@@ -406,7 +406,14 @@ function drawGreeksTable(m) {
   const want = [atmIdx - 4, atmIdx - 2, atmIdx, atmIdx + 2, atmIdx + 4];
   const pick = want.filter(j => j >= 0 && j < m.strikes.length);
 
-  let html = `<tr><th>K</th><th>δc</th><th>δp</th><th>γ</th><th>ν</th><th>θ</th></tr>`;
+  let html = `<tr>
+    <th data-explain="variance-swap-k">K</th>
+    <th data-explain="delta-c">δc</th>
+    <th data-explain="delta-p">δp</th>
+    <th data-explain="gamma">γ</th>
+    <th data-explain="vega">ν</th>
+    <th data-explain="theta">θ</th>
+  </tr>`;
   pick.forEach(j => {
     const isAtm = j === atmIdx;
     html += `<tr class="${isAtm ? 'atm' : ''}">
@@ -428,16 +435,30 @@ function drawGreeksTable(m) {
    on each WS tick rather than rebuilding the chart.
    ===================================================================== */
 const historyChartState = {
-  marketIdx:   -1,          // which market the chart currently shows
-  kind:        "area",      // "area" or "candle"
-  chart:       null,        // IChartApi
-  series:      null,        // ISeriesApi<"Area"|"Candlestick">
-  lastTs:      0,           // last timestamp we've pushed, in seconds
-  // For candle mode: how many raw ticks per candle, and the candle being built
-  candleBucketSec: 0,       // dynamic based on poll interval
-  pendingCandle: null,
-  rawPoints:   [],          // the history as (ts_sec, price) for rebuilds
+  marketIdx:       -1,
+  kind:            "area",     // "area" or "candle"
+  timeframeSec:    15,         // default 15s candles
+  chart:           null,
+  series:          null,
+  lastTs:          0,
+  pendingCandle:   null,
+  prevClose:       null,
+  rawPoints:       [],
 };
+
+const TIMEFRAMES = [
+  { key: "1s",  sec: 1,     label: "1s",  precision: 3, minMove: 0.0001 },
+  { key: "15s", sec: 15,    label: "15s", precision: 3, minMove: 0.0005 },
+  { key: "1m",  sec: 60,    label: "1m",  precision: 2, minMove: 0.001  },
+  { key: "5m",  sec: 300,   label: "5m",  precision: 2, minMove: 0.001  },
+  { key: "30m", sec: 1800,  label: "30m", precision: 2, minMove: 0.001  },
+  { key: "1h",  sec: 3600,  label: "1h",  precision: 1, minMove: 0.001  },
+  { key: "1d",  sec: 86400, label: "1d",  precision: 1, minMove: 0.001  },
+];
+
+function currentTimeframe() {
+  return TIMEFRAMES.find(t => t.sec === historyChartState.timeframeSec) || TIMEFRAMES[1];
+}
 
 /* Chart color palette — Bloomberg-aesthetic tuned for Apple off-white bg */
 const LWC_COLORS = {
@@ -576,7 +597,7 @@ function drawHistoryChart(m) {
   historyChartState.marketIdx = idx;
   historyChartState.lastTs = 0;
   historyChartState.pendingCandle = null;
-  historyChartState.candleBucketSec = adaptiveBucketSec(raw, 60);
+  historyChartState.prevClose = null;
   attachHistorySeries(historyChartState.kind);
   attachCrosshairReadout();
 
@@ -585,13 +606,7 @@ function drawHistoryChart(m) {
 
   document.querySelectorAll('.chart-toggle[data-target="d-chart-history"] button')
     .forEach(btn => btn.classList.toggle("active", btn.dataset.kind === historyChartState.kind));
-}
-
-/** Adaptive candle bucket — target ~N visible candles across the full span */
-function adaptiveBucketSec(raw, targetCount) {
-  if (raw.length < 2) return 60;
-  const span = raw[raw.length - 1].time - raw[0].time;
-  return Math.max(10, Math.round(span / targetCount));
+  updateTimeframeButtons();
 }
 
 function attachHistorySeries(kind) {
@@ -601,6 +616,9 @@ function attachHistorySeries(kind) {
     historyChartState.series = null;
   }
 
+  const tf = currentTimeframe();
+  const fmtCents = v => (v * 100).toFixed(tf.precision) + "¢";
+
   if (kind === "candle") {
     historyChartState.series = historyChartState.chart.addCandlestickSeries({
       upColor:       LWC_COLORS.up,
@@ -609,7 +627,7 @@ function attachHistorySeries(kind) {
       wickDownColor: LWC_COLORS.down,
       borderVisible: false,
       priceScaleId:  "right",
-      priceFormat: { type: "custom", minMove: 0.001, formatter: v => (v * 100).toFixed(1) + "¢" },
+      priceFormat: { type: "custom", minMove: tf.minMove, formatter: fmtCents },
     });
   } else {
     historyChartState.series = historyChartState.chart.addAreaSeries({
@@ -618,17 +636,28 @@ function attachHistorySeries(kind) {
       bottomColor: "rgba(26, 86, 219, 0.00)",
       lineWidth: 2,
       priceScaleId:  "right",
-      priceFormat: { type: "custom", minMove: 0.001, formatter: v => (v * 100).toFixed(1) + "¢" },
+      priceFormat: { type: "custom", minMove: tf.minMove, formatter: fmtCents },
     });
   }
+
+  // Auto-scale price axis — crucial for short timeframes where prices barely
+  // move. Without this, a 1s chart would show a flat line squished at the top
+  // of a 0..100¢ scale. With it, y-axis auto-fits to the data range.
+  historyChartState.chart.priceScale("right").applyOptions({
+    autoScale: true,
+    mode: 0,   // Normal mode (not percentage)
+  });
+
   historyChartState.kind = kind;
 }
 
 function seedHistorySeries(raw) {
   if (!historyChartState.series || !raw.length) return;
 
+  const bucketSec = historyChartState.timeframeSec;
+
   if (historyChartState.kind === "candle") {
-    const candles = bucketIntoCandles(raw, historyChartState.candleBucketSec);
+    const candles = bucketIntoCandles(raw, bucketSec);
     let prevClose = candles[0] ? candles[0].open : 0;
     for (const c of candles) {
       const up = c.close > prevClose + 1e-9;
@@ -642,11 +671,30 @@ function seedHistorySeries(raw) {
     historyChartState.pendingCandle = candles.length ? { ...candles[candles.length - 1] } : null;
     historyChartState.prevClose = prevClose;
   } else {
-    historyChartState.series.setData(raw);
+    // Line mode: bucket by close-of-bucket so the line has a consistent
+    // timeframe granularity. Without this, a 1m-timeframe line chart would
+    // have ~60 redundant points per minute when data is at 1Hz.
+    const lineData = bucketIntoCloses(raw, bucketSec);
+    historyChartState.series.setData(lineData);
   }
 
   historyChartState.lastTs = raw[raw.length - 1].time;
-  // Don't call fitContent — constrainTimeScale handles the range explicitly.
+}
+
+/** For line mode: collapse each bucket to its close value (last observation). */
+function bucketIntoCloses(raw, bucketSec) {
+  const out = [];
+  let curBucket = null, curValue = null;
+  for (const p of raw) {
+    const b = Math.floor(p.time / bucketSec) * bucketSec;
+    if (b !== curBucket) {
+      if (curBucket !== null) out.push({ time: curBucket, value: curValue });
+      curBucket = b;
+    }
+    curValue = p.value;
+  }
+  if (curBucket !== null) out.push({ time: curBucket, value: curValue });
+  return out;
 }
 
 function updateHistoryChartIncremental(m) {
@@ -669,7 +717,14 @@ function updateHistoryChartIncremental(m) {
   if (historyChartState.kind === "candle") {
     newPts.forEach(p => pushCandleTick(p));
   } else {
-    newPts.forEach(p => historyChartState.series.update(p));
+    // Line mode: bucket the new ticks into the active timeframe and push
+    // close-of-bucket. lightweight-charts' update() handles both new-bucket
+    // ("insert") and same-bucket ("amend last point") cases automatically.
+    const tfSec = historyChartState.timeframeSec;
+    newPts.forEach(p => {
+      const b = Math.floor(p.time / tfSec) * tfSec;
+      historyChartState.series.update({ time: b, value: p.value });
+    });
   }
 
   historyChartState.lastTs = newPts[newPts.length - 1].time;
@@ -694,10 +749,10 @@ function bucketIntoCandles(raw, bucketSec) {
 }
 
 function pushCandleTick(pt) {
-  const bucket = Math.floor(pt.time / historyChartState.candleBucketSec) * historyChartState.candleBucketSec;
+  const tfSec = historyChartState.timeframeSec;
+  const bucket = Math.floor(pt.time / tfSec) * tfSec;
   const cur = historyChartState.pendingCandle;
   if (!cur || cur.time !== bucket) {
-    // close out the old pending; open a new one. Color previous by its close vs prior prevClose.
     if (cur) historyChartState.prevClose = cur.close;
     const prev = historyChartState.prevClose ?? pt.value;
     const up   = pt.value > prev + 1e-9;
@@ -712,7 +767,6 @@ function pushCandleTick(pt) {
     cur.high  = Math.max(cur.high, pt.value);
     cur.low   = Math.min(cur.low,  pt.value);
     cur.close = pt.value;
-    // Refresh color as intraday changes accumulate
     const prev = historyChartState.prevClose ?? cur.open;
     const up   = cur.close > prev + 1e-9;
     const down = cur.close < prev - 1e-9;
@@ -791,6 +845,32 @@ function formatReadout(time, price, mode) {
       .forEach(b => b.classList.toggle("active", b.dataset.kind === kind));
   });
 })();
+
+/* Timeframe selector — rebucket raw points into the selected interval */
+(function initTimeframeToggle() {
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("#history-tf-toggle button");
+    if (!btn) return;
+    const tf = parseInt(btn.dataset.tf, 10);
+    if (!tf || tf === historyChartState.timeframeSec) return;
+    historyChartState.timeframeSec = tf;
+    // Re-attach the series (picks up new precision) and re-seed from raw data
+    if (historyChartState.chart) {
+      historyChartState.pendingCandle = null;
+      historyChartState.prevClose = null;
+      attachHistorySeries(historyChartState.kind);
+      seedHistorySeries(historyChartState.rawPoints);
+      // Let lightweight-charts auto-scale the time axis to fit the new granularity
+      historyChartState.chart.timeScale().fitContent();
+    }
+    updateTimeframeButtons();
+  });
+})();
+
+function updateTimeframeButtons() {
+  document.querySelectorAll("#history-tf-toggle button")
+    .forEach(b => b.classList.toggle("active", parseInt(b.dataset.tf, 10) === historyChartState.timeframeSec));
+}
 
 
 function drawBVIXChart(m) {
@@ -1610,5 +1690,327 @@ function setLiveState(state, label) {
   pulse.style.background = c;
   pulse.style.animation = state === "live" ? "pulse 2.4s infinite" : "none";
 }
+
+/* ====================================================================
+   Tutorial / explain layer
+   --------------------------------------------------------------------
+   Any element with a data-explain="key" attribute becomes hoverable
+   (tooltip appears) and clickable (pinned into the side panel). The
+   content dictionary below is the single source of truth for what
+   each term/tool does, how to read it, and why it's useful.
+   ==================================================================== */
+
+const EXPLAIN = {
+  // ---------- OIEC core concept ----------
+  "oiec": {
+    title: "OIEC",
+    label: "The derivative layer",
+    content: `<strong>Option-Implied Event Contracts</strong> are call and put options written on
+      prediction-market probabilities. Instead of holding a binary "will Democrat win 2028?"
+      contract for two years until resolution, you can trade a 3-month OIEC that settles on
+      whatever probability the market implies at expiry. This turns multi-year capital lockups
+      into 3-month cycles — the crux of the research.`,
+  },
+  "jacobi-sde": {
+    title: "Jacobi diffusion",
+    label: "Underlying model",
+    content: `Prices of prediction markets live strictly in [0,1], so you can't model them with
+      Black-Scholes geometric Brownian motion (which drifts to infinity). The Jacobi SDE
+      <span class="formula">dP = σ·√(P(1−P))·dW</span> naturally stays bounded — volatility
+      vanishes at P=0 and P=1, exactly where you'd expect in a market that's
+      "decided." Closed-form option prices and Greeks follow from this dynamic.`,
+  },
+  "bvix-definition": {
+    title: "BVIX",
+    label: "Belief Volatility Index",
+    content: `The <strong>Belief Volatility Index</strong> is the VIX analogue for prediction
+      markets — the market-implied volatility of the underlying probability, not of an asset
+      price. Think of it as how "settled" the crowd is. A BVIX of 0.10 means low uncertainty
+      (the probability is unlikely to move much); 0.80 means high (potentially large swings).`,
+  },
+  "bvix-model-free": {
+    title: "Model-free BVIX",
+    label: "Replicated, not modelled",
+    content: `Computed directly from the <strong>variance-swap strike</strong> — the weighted
+      integral of OTM calls and puts across strikes. This is model-free because it uses no
+      assumption about the underlying dynamics; it's pure replication from option prices.
+      When this diverges from model-based BVIX, the market is pricing skew the Jacobi model
+      doesn't capture.`,
+  },
+  "bvix-model-based": {
+    title: "Model-based BVIX",
+    label: "Jacobi-implied",
+    content: `Computed from the calibrated σ̂ under the assumption that prices follow the
+      Jacobi SDE. Specifically <span class="formula">BVIX = σ̂·√(P(1−P))·√τ · c</span> for a
+      normalization constant c. Useful as a benchmark — deviations from model-free BVIX
+      signal mispricing or model misspecification.`,
+  },
+  "sigma-hat": {
+    title: "σ̂",
+    label: "Calibrated volatility",
+    content: `Rolling estimate of the Jacobi σ parameter from the market's own price history.
+      Uses the fact that under the Jacobi SDE, the normalized increment
+      <span class="formula">(P_{t+dt} − P_t) / √(P_t(1−P_t))</span> has variance σ²·dt. Winsorized
+      to resist single-tick glitches. This is the only input the pricing engine needs.`,
+  },
+  "tau": {
+    title: "τ (tau)",
+    label: "OIEC expiry",
+    content: `Horizon of the option — when it settles. Typically much shorter than the
+      underlying event's resolution date. For a 2028 election market (resolves Nov 2028),
+      a τ=0.25y OIEC settles in ~3 months on the market-implied probability at that time.
+      This is what lets you recycle capital.`,
+  },
+  "ttr": {
+    title: "TTR",
+    label: "Time to resolution",
+    content: `<strong>Time to Resolution</strong> of the underlying prediction market. For
+      "Democrat wins 2028?", TTR ≈ 2.5 years from today. Capital backing a direct position
+      in the prediction market is locked for TTR years. OIECs shorten the effective lockup
+      to τ — the main economic claim of the paper.`,
+  },
+  "variance-swap-k": {
+    title: "Variance-swap strike",
+    label: "Fair vol² over τ",
+    content: `The strike K for which a variance swap (pay fixed K, receive realized variance)
+      has zero initial cost. Computed from the full option surface via
+      <span class="formula">K = 2·∫ C(k)/k² dk + 2·∫ P(k)/k² dk</span>. Model-free BVIX is
+      just <span class="formula">√(K·τ)</span> rescaled.`,
+  },
+
+  // ---------- Greeks ----------
+  "delta-c": {
+    title: "δ call",
+    label: "Call delta",
+    content: `Sensitivity of the call price to a 1-unit move in the probability.
+      <span class="formula">δc = ∂C/∂P</span>. Always in [0,1]: at-the-money ≈ 0.5, deep
+      in-the-money ≈ 1, deep out ≈ 0. Practically: if δc=0.5, your call gains ~0.5¢ for
+      every 1¢ the underlying probability rises.`,
+  },
+  "delta-p": {
+    title: "δ put",
+    label: "Put delta",
+    content: `Sensitivity of the put price to the probability. Always in [-1,0].
+      Put-call parity in prediction markets: <span class="formula">δc − δp = 1</span>
+      (not just ≤ as in BS).`,
+  },
+  "gamma": {
+    title: "Γ (gamma)",
+    label: "Delta's derivative",
+    content: `How fast delta changes. <span class="formula">Γ = ∂²C/∂P²</span>. Highest at
+      the strike. For prediction markets Γ can be quite large because the probability has
+      nowhere to go past [0,1] — near the boundary, small probability moves cause large
+      payoff changes.`,
+  },
+  "vega": {
+    title: "ν (vega)",
+    label: "Vol sensitivity",
+    content: `How much the option price changes per unit change in σ̂.
+      <span class="formula">ν = ∂C/∂σ</span>. Maximum at-the-money. If σ̂ rises 0.10 and
+      vega is 0.05, the option gains ~0.005 in premium.`,
+  },
+  "theta": {
+    title: "Θ (theta)",
+    label: "Time decay",
+    content: `Option price decay per unit of calendar time. <span class="formula">Θ = ∂C/∂t</span>.
+      Always negative for long option positions — the seller keeps this as "rent." In
+      prediction markets with τ of a few months, theta concentrates in the final weeks
+      as uncertainty resolves.`,
+  },
+
+  // ---------- Arbitrage mechanics ----------
+  "cross-spread": {
+    title: "Cross-venue spread",
+    label: "The arb opportunity",
+    content: `Gap between Polymarket and Kalshi prices on the same (or equivalent) event.
+      Before OIECs this spread is a long-duration bet — you buy low on one venue, sell high
+      on the other, and lock capital until the event resolves.`,
+  },
+  "compression-factor": {
+    title: "Compression factor",
+    label: "How much shorter",
+    content: `Ratio of TTR to τ. A compression factor of 30 means the OIEC lets you recycle
+      capital 30× per year vs holding the underlying to resolution. Combined with the tighter
+      OIEC spread that follows from the derivative layer, this is where the ~100× arbitrage
+      improvement comes from.`,
+  },
+  "horizon-shortening": {
+    title: "Horizon shortening",
+    label: "The core claim",
+    content: `Under naive arbitrage, you earn <span class="formula">spread / TTR</span> annualized.
+      With OIECs, you earn <span class="formula">spread_OIEC / τ</span> per cycle, cycling
+      <span class="formula">1/τ</span> times per year. Same spread-per-unit-time, but orders
+      of magnitude more cycles.`,
+  },
+
+  // ---------- Chart / UI ----------
+  "timeframe": {
+    title: "Timeframe",
+    label: "Candle aggregation",
+    content: `Each candle aggregates all ticks inside that time window. A 1s candle shows
+      each per-second poll as its own bar with auto-scaled Y-axis — use this to see
+      micro-movements that would be invisible at longer intervals. 1m and higher smooth
+      out noise and reveal regime changes.`,
+  },
+  "chartKind.line": {
+    title: "Line mode",
+    label: "Close-of-bucket trajectory",
+    content: `Plots one point per time bucket using the close-of-bucket value. Best for
+      reading the overall trend and for comparing against model outputs (σ̂, BVIX). Line
+      mode trades detail for clarity.`,
+  },
+  "chartKind.candle": {
+    title: "Candle mode",
+    label: "OHLC per bucket",
+    content: `Each candle shows open-high-low-close for that time bucket. Green means close
+      &gt; previous close, red means close &lt; previous close, grey means unchanged.
+      Wicks show intra-bucket range. For prediction markets with slow movement, shorter
+      timeframes give the most useful candles.`,
+  },
+  "surface-lab": {
+    title: "Surface Lab",
+    label: "What-if pricing",
+    content: `Drag the sliders to see how the entire option surface reshapes under different
+      P, σ, K, τ. Lets you build intuition about the Jacobi model before committing real
+      capital. The 3D surface is <span class="formula">C(K, τ)</span> — call premium over
+      the joint strike × expiry grid.`,
+  },
+  "live-status": {
+    title: "Live status",
+    label: "Data freshness",
+    content: `Green pulse = WebSocket connected and ticking. Amber = no tick in &gt;15 seconds
+      (stale). Red = disconnected, attempting reconnect. Tick counter in the status bar
+      shows how many polls the backend has completed since startup.`,
+  },
+  "scrubber": {
+    title: "History scrubber",
+    label: "Replay the past",
+    content: `Drag the slider or press play to walk through the rolling price buffer. All
+      option prices and Greeks recompute at each historical point under the calibrated σ̂,
+      so you can see how the derivative would have behaved.`,
+  },
+};
+
+/* ---- Tooltip + side panel wiring ---- */
+
+let explainTooltipEl = null;
+let explainPanelEl = null;
+
+function ensureExplainDom() {
+  if (!explainTooltipEl) {
+    explainTooltipEl = document.createElement("div");
+    explainTooltipEl.className = "explain-tooltip";
+    document.body.appendChild(explainTooltipEl);
+  }
+  if (!explainPanelEl) {
+    explainPanelEl = document.createElement("aside");
+    explainPanelEl.className = "explain-panel";
+    explainPanelEl.innerHTML = `
+      <button class="panel-close" aria-label="Close">close ×</button>
+      <div class="panel-body"></div>
+    `;
+    document.body.appendChild(explainPanelEl);
+    explainPanelEl.querySelector(".panel-close").addEventListener("click", () => {
+      explainPanelEl.classList.remove("open");
+    });
+  }
+}
+
+function positionTooltip(el) {
+  const rect = el.getBoundingClientRect();
+  const tw = explainTooltipEl.offsetWidth;
+  const th = explainTooltipEl.offsetHeight;
+  // Prefer above; flip below if it would clip
+  let top = rect.top - th - 10;
+  let left = rect.left + rect.width / 2 - tw / 2;
+  if (top < 10) top = rect.bottom + 10;
+  left = Math.max(10, Math.min(window.innerWidth - tw - 10, left));
+  explainTooltipEl.style.top  = top  + "px";
+  explainTooltipEl.style.left = left + "px";
+}
+
+function showExplainTooltip(el, key) {
+  const e = EXPLAIN[key];
+  if (!e) return;
+  ensureExplainDom();
+  explainTooltipEl.innerHTML = `
+    <div class="title">${e.label || e.title}</div>
+    <div class="body">${stripHtmlForTooltip(e.content)}</div>
+    <div class="pin-hint">Click to pin for details →</div>
+  `;
+  explainTooltipEl.classList.add("visible");
+  requestAnimationFrame(() => positionTooltip(el));
+}
+
+function hideExplainTooltip() {
+  if (explainTooltipEl) explainTooltipEl.classList.remove("visible");
+}
+
+/** Tooltip shows a short version — strip the <span class="formula"> markup and
+    truncate to ~160 chars. The full richness appears in the pinned side panel. */
+function stripHtmlForTooltip(html) {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  const text = tmp.textContent || "";
+  return text.length > 200 ? text.slice(0, 197) + "…" : text;
+}
+
+function pinExplain(key) {
+  const e = EXPLAIN[key];
+  if (!e) return;
+  ensureExplainDom();
+  const body = explainPanelEl.querySelector(".panel-body");
+  body.innerHTML = `
+    <span class="tag">${e.label || "concept"}</span>
+    <h3>${e.title}</h3>
+    <div class="section">
+      <div class="label">What it is</div>
+      <div class="content">${e.content}</div>
+    </div>
+    <div class="footer">From the OIEC research paper · Shah, 2026</div>
+  `;
+  explainPanelEl.classList.add("open");
+  hideExplainTooltip();
+}
+
+(function initExplainLayer() {
+  // Hover: show tooltip
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest("[data-explain]");
+    if (!el) return;
+    const key = el.dataset.explain;
+    if (!EXPLAIN[key]) return;
+    showExplainTooltip(el, key);
+  });
+  document.addEventListener("mouseout", (e) => {
+    const el = e.target.closest("[data-explain]");
+    if (!el) return;
+    // Only hide if we're moving OUT of the element, not to a child of it
+    if (el.contains(e.relatedTarget)) return;
+    hideExplainTooltip();
+  });
+
+  // Click: pin to side panel (unless the click lands on a button that has its
+  // own click behavior — e.g. the tf-toggle buttons. In that case we wait a
+  // tick and let their handler fire normally, then pin after.)
+  document.addEventListener("click", (e) => {
+    const el = e.target.closest("[data-explain]");
+    if (!el) return;
+    // Don't steal clicks from actionable controls
+    if (el.tagName === "BUTTON" || el.tagName === "A" || el.tagName === "INPUT") {
+      // Shift+click opens the explain panel even on actionable controls, as an escape
+      if (!e.shiftKey) return;
+    }
+    e.preventDefault();
+    pinExplain(el.dataset.explain);
+  });
+
+  // Escape closes the panel
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && explainPanelEl && explainPanelEl.classList.contains("open")) {
+      explainPanelEl.classList.remove("open");
+    }
+  });
+})();
 
 boot();

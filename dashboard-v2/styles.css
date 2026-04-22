@@ -1258,3 +1258,188 @@ footer .formula {
   transition: opacity 0.15s;
 }
 .tv-attr:hover { opacity: 1; }
+
+/* ==============================================================
+   Timeframe selector — matches chart-toggle but compact and
+   distinguishable (outlined buttons, not filled bar)
+   ============================================================== */
+.tf-toggle {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid var(--line, #e5e5ea);
+  border-radius: 6px;
+  background: #f6f6f7;
+}
+.tf-toggle button {
+  padding: 3px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-family: var(--mono, "JetBrains Mono", monospace);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--ink-3, #6e6e73);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  min-width: 26px;
+}
+.tf-toggle button:hover { color: var(--ink, #1d1d1f); background: rgba(0,0,0,0.04); }
+.tf-toggle button.active { background: var(--accent, #1a56db); color: #fff; }
+
+/* ==============================================================
+   Explain layer — tooltips on hover, pinned side-panel on click.
+   Any element with [data-explain="key"] gets the treatment.
+   ============================================================== */
+
+/* Subtle affordance that an element is explained */
+[data-explain] {
+  position: relative;
+  cursor: help;
+}
+[data-explain]:not(button):not(a):not(input) {
+  /* Give non-interactive elements a subtle dotted underline to hint interactivity */
+  border-bottom: 1px dotted rgba(110, 110, 115, 0.35);
+  padding-bottom: 1px;
+  transition: border-color 0.15s, background 0.15s;
+}
+[data-explain]:not(button):not(a):not(input):hover {
+  border-bottom-color: var(--accent, #1a56db);
+}
+
+/* Floating tooltip shown on hover */
+.explain-tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 320px;
+  padding: 12px 14px;
+  background: #1d1d1f;
+  color: #f2f2f7;
+  border-radius: 8px;
+  font-family: var(--sans, "Instrument Sans", -apple-system, system-ui);
+  font-size: 12.5px;
+  line-height: 1.5;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.22), 0 2px 6px rgba(0,0,0,0.12);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.explain-tooltip.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.explain-tooltip .title {
+  font-family: var(--mono, "JetBrains Mono", monospace);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #a1a1a6;
+  margin-bottom: 4px;
+}
+.explain-tooltip .body { color: #f2f2f7; }
+.explain-tooltip .pin-hint {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.12);
+  font-size: 10.5px;
+  color: #98989d;
+  font-family: var(--mono, "JetBrains Mono", monospace);
+}
+
+/* Pinned side panel — appears when user clicks an explained element */
+.explain-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 380px;
+  max-width: 90vw;
+  height: 100vh;
+  background: #fbfbfd;
+  border-left: 1px solid var(--line, #e5e5ea);
+  box-shadow: -20px 0 48px rgba(0,0,0,0.06);
+  padding: 32px 28px 24px;
+  overflow-y: auto;
+  transform: translateX(100%);
+  transition: transform 0.28s cubic-bezier(0.32, 0.72, 0.00, 1.00);
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+}
+.explain-panel.open { transform: translateX(0); }
+
+.explain-panel .panel-close {
+  align-self: flex-end;
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  font-family: var(--mono, "JetBrains Mono", monospace);
+  color: var(--ink-3, #6e6e73);
+  cursor: pointer;
+  padding: 4px 8px;
+  margin-right: -8px;
+}
+.explain-panel .panel-close:hover { color: var(--ink, #1d1d1f); }
+
+.explain-panel .tag {
+  display: inline-block;
+  padding: 3px 8px;
+  background: var(--accent, #1a56db);
+  color: #fff;
+  border-radius: 4px;
+  font-family: var(--mono, "JetBrains Mono", monospace);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+  margin-top: 8px;
+}
+
+.explain-panel h3 {
+  font-family: var(--serif, Fraunces, Georgia, serif);
+  font-weight: 400;
+  font-size: 26px;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: var(--ink, #1d1d1f);
+  margin: 0 0 16px;
+}
+
+.explain-panel .section { margin-bottom: 22px; }
+.explain-panel .section .label {
+  font-family: var(--mono, "JetBrains Mono", monospace);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3, #6e6e73);
+  margin-bottom: 6px;
+}
+.explain-panel .section .content {
+  font-family: var(--sans, "Instrument Sans", system-ui);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-2, #3a3a3c);
+}
+.explain-panel .section .content strong { color: var(--ink, #1d1d1f); }
+.explain-panel .section .content .formula {
+  display: inline-block;
+  padding: 2px 6px;
+  background: #f1f1f4;
+  border-radius: 3px;
+  font-family: var(--mono, "JetBrains Mono", monospace);
+  font-size: 12.5px;
+  color: var(--ink, #1d1d1f);
+}
+
+.explain-panel .footer {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--line, #e5e5ea);
+  font-family: var(--mono, "JetBrains Mono", monospace);
+  font-size: 11px;
+  color: var(--ink-3, #6e6e73);
+}

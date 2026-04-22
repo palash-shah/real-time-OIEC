@@ -32,7 +32,7 @@
       <a class="nav-link" data-route="/bvix" href="#/bvix">BVIX</a>
       <a class="nav-link" data-route="/arb" href="#/arb">Arbitrage</a>
     </div>
-    <div class="nav-status">
+    <div class="nav-status" data-explain="live-status">
       <span class="pulse"></span>
       <span id="status-tag">—</span>
     </div>
@@ -53,18 +53,20 @@
       what <em>markets</em> believe.
     </h1>
     <p class="lede">
-      A pricing and trading layer for prediction markets. Options, variance swaps,
-      and belief-volatility indices — written on event futures, priced under a
-      Jacobi diffusion, and settling through existing venues.
+      A pricing and trading layer for prediction markets. <span data-explain="oiec">Options</span>,
+      <span data-explain="variance-swap-k">variance swaps</span>,
+      and <span data-explain="bvix-definition">belief-volatility indices</span> — written on event futures, priced under a
+      <span data-explain="jacobi-sde">Jacobi diffusion</span>, and settling through existing venues.
     </p>
 
     <div class="compression-card">
-      <div class="label">Mean spread compression</div>
+      <div class="label" data-explain="compression-factor">Mean spread compression</div>
       <div class="bignum" id="home-bignum">—<span class="suffix">×</span></div>
       <div class="caption">
         The derivatives layer <em>collapses</em> cross-venue arbitrage bounds
-        by two orders of magnitude — not by pricing better, but by shortening
-        the capital horizon from <em>years</em> to <em>weeks</em>.
+        by two orders of magnitude — not by pricing better, but by
+        <span data-explain="horizon-shortening">shortening the capital horizon</span>
+        from <em>years</em> to <em>weeks</em>.
       </div>
     </div>
 
@@ -104,34 +106,48 @@
         <button class="close" id="d-close">Close ✕</button>
       </div>
       <div class="kpi-row">
-        <div class="kpi"><div class="k">Current</div><div class="v" id="d-price">—</div></div>
-        <div class="kpi"><div class="k">σ̂</div><div class="v" id="d-sigma">—</div></div>
-        <div class="kpi"><div class="k">BVIX · free</div><div class="v" id="d-bvix-mf">—</div></div>
-        <div class="kpi"><div class="k">BVIX · model</div><div class="v" id="d-bvix-mb">—</div></div>
-        <div class="kpi"><div class="k">Var-swap K</div><div class="v" id="d-varswap">—</div></div>
+        <div class="kpi"><div class="k" data-explain="oiec">Current</div><div class="v" id="d-price">—</div></div>
+        <div class="kpi"><div class="k" data-explain="sigma-hat">σ̂</div><div class="v" id="d-sigma">—</div></div>
+        <div class="kpi"><div class="k" data-explain="bvix-model-free">BVIX · free</div><div class="v" id="d-bvix-mf">—</div></div>
+        <div class="kpi"><div class="k" data-explain="bvix-model-based">BVIX · model</div><div class="v" id="d-bvix-mb">—</div></div>
+        <div class="kpi"><div class="k" data-explain="variance-swap-k">Var-swap K</div><div class="v" id="d-varswap">—</div></div>
       </div>
 
       <div class="detail-grid">
         <div>
-          <div class="panel-title">Option surface · call &amp; put vs strike <small id="d-surf-sub">—</small></div>
+          <div class="panel-title"><span data-explain="oiec">Option surface</span> · call &amp; put vs strike <small id="d-surf-sub">—</small></div>
           <div class="chart-wrap tall"><canvas id="d-chart-surface"></canvas></div>
         </div>
         <div>
-          <div class="panel-title">Greeks at spot <small>δ · γ · ν · θ</small></div>
+          <div class="panel-title"><span data-explain="jacobi-sde">Greeks at spot</span> <small>
+            <span data-explain="delta-c">δ</span> ·
+            <span data-explain="gamma">γ</span> ·
+            <span data-explain="vega">ν</span> ·
+            <span data-explain="theta">θ</span>
+          </small></div>
           <table class="greeks-table" id="d-greeks"></table>
         </div>
         <div>
           <div class="panel-title">
             Price history
             <span class="chart-toggle" data-target="d-chart-history">
-              <button data-kind="area" class="active">Line</button>
-              <button data-kind="candle">Candle</button>
+              <button data-kind="area" class="active" data-explain="chartKind.line">Line</button>
+              <button data-kind="candle" data-explain="chartKind.candle">Candle</button>
+            </span>
+            <span class="tf-toggle" id="history-tf-toggle" data-explain="timeframe">
+              <button data-tf="1">1s</button>
+              <button data-tf="15" class="active">15s</button>
+              <button data-tf="60">1m</button>
+              <button data-tf="300">5m</button>
+              <button data-tf="1800">30m</button>
+              <button data-tf="3600">1h</button>
+              <button data-tf="86400">1d</button>
             </span>
           </div>
           <div class="chart-wrap" id="d-chart-history"></div>
         </div>
         <div>
-          <div class="panel-title">BVIX term structure <small>implied belief-vol by horizon</small></div>
+          <div class="panel-title"><span data-explain="bvix-definition">BVIX term structure</span> <small>implied belief-vol by horizon</small></div>
           <div class="chart-wrap"><canvas id="d-chart-bvix"></canvas></div>
         </div>
       </div>
@@ -154,40 +170,40 @@
       <div class="selector" id="lab-market-selector"></div>
 
       <div class="slider-group">
-        <div class="label"><span class="name">Strike · K</span><span class="val mono" id="lab-K-val">0.50</span></div>
+        <div class="label"><span class="name" data-explain="variance-swap-k">Strike · K</span><span class="val mono" id="lab-K-val">0.50</span></div>
         <input class="slider" id="lab-K" type="range" min="0.05" max="0.95" step="0.01" value="0.50" />
       </div>
 
       <div class="slider-group">
-        <div class="label"><span class="name">Horizon · τ (years)</span><span class="val mono" id="lab-tau-val">0.25</span></div>
+        <div class="label"><span class="name" data-explain="tau">Horizon · τ (years)</span><span class="val mono" id="lab-tau-val">0.25</span></div>
         <input class="slider" id="lab-tau" type="range" min="0.02" max="1.50" step="0.01" value="0.25" />
       </div>
 
       <div class="slider-group">
-        <div class="label"><span class="name">Spot · P</span><span class="val mono" id="lab-P-val">0.50</span></div>
+        <div class="label"><span class="name" data-explain="oiec">Spot · P</span><span class="val mono" id="lab-P-val">0.50</span></div>
         <input class="slider" id="lab-P" type="range" min="0.02" max="0.98" step="0.01" value="0.50" />
       </div>
 
       <div class="slider-group">
-        <div class="label"><span class="name">Volatility · σ</span><span class="val mono" id="lab-sigma-val">1.000</span></div>
+        <div class="label"><span class="name" data-explain="sigma-hat">Volatility · σ</span><span class="val mono" id="lab-sigma-val">1.000</span></div>
         <input class="slider" id="lab-sigma" type="range" min="0.10" max="2.50" step="0.01" value="1.00" />
       </div>
 
       <div class="lab-readout" id="lab-readout">
-        <div class="r-row"><span class="k">Call</span><span class="v call" id="lab-call">—</span></div>
-        <div class="r-row"><span class="k">Put</span><span class="v put" id="lab-put">—</span></div>
-        <div class="r-row"><span class="k">δ call</span><span class="v" id="lab-dc">—</span></div>
-        <div class="r-row"><span class="k">δ put</span><span class="v" id="lab-dp">—</span></div>
-        <div class="r-row"><span class="k">γ</span><span class="v" id="lab-g">—</span></div>
-        <div class="r-row"><span class="k">ν</span><span class="v" id="lab-v">—</span></div>
-        <div class="r-row"><span class="k">θ</span><span class="v" id="lab-th">—</span></div>
+        <div class="r-row"><span class="k" data-explain="oiec">Call</span><span class="v call" id="lab-call">—</span></div>
+        <div class="r-row"><span class="k" data-explain="oiec">Put</span><span class="v put" id="lab-put">—</span></div>
+        <div class="r-row"><span class="k" data-explain="delta-c">δ call</span><span class="v" id="lab-dc">—</span></div>
+        <div class="r-row"><span class="k" data-explain="delta-p">δ put</span><span class="v" id="lab-dp">—</span></div>
+        <div class="r-row"><span class="k" data-explain="gamma">γ</span><span class="v" id="lab-g">—</span></div>
+        <div class="r-row"><span class="k" data-explain="vega">ν</span><span class="v" id="lab-v">—</span></div>
+        <div class="r-row"><span class="k" data-explain="theta">θ</span><span class="v" id="lab-th">—</span></div>
       </div>
     </aside>
 
     <div class="lab-surface">
       <div class="lab-surface-head">
         <div class="panel-title" style="margin:0;">
-          3D premium surface <small>strike K × horizon τ → call premium · drag to rotate</small>
+          <span data-explain="surface-lab">3D premium surface</span> <small>strike K × horizon τ → call premium · drag to rotate</small>
         </div>
         <div class="mono" style="font-size:11px; color:var(--ink-3);" id="lab-surface-sub">—</div>
       </div>
@@ -209,11 +225,11 @@
 
     <div class="bvix-panels">
       <div class="bvix-panel">
-        <h3 class="display">Cross-market BVIX</h3>
+        <h3 class="display"><span data-explain="bvix-definition">Cross-market BVIX</span></h3>
         <div class="chart-wrap"><canvas id="bvix-chart-cross"></canvas></div>
       </div>
       <div class="bvix-panel">
-        <h3 class="display">Term structure · all markets</h3>
+        <h3 class="display"><span data-explain="bvix-definition">Term structure</span> · all markets</h3>
         <div class="chart-wrap"><canvas id="bvix-chart-term"></canvas></div>
       </div>
     </div>
@@ -230,7 +246,7 @@
 
   <div class="arb-layout">
     <div class="arb-hero">
-      <h2 class="display">What a derivatives layer does to arbitrage.</h2>
+      <h2 class="display">What a <span data-explain="oiec">derivatives layer</span> does to <span data-explain="cross-spread">arbitrage</span>.</h2>
       <p>Same opportunity. Before OIECs, capital is locked until resolution. After, it recycles at the nearest derivative expiry.</p>
 
       <div class="arb-calc">
@@ -244,7 +260,7 @@
             <input type="number" id="arb-capital" value="100000" min="1000" step="1000" />
           </div>
           <div class="arb-input-group">
-            <label>Override spread (¢) <span style="color:var(--ink-3);">· optional</span></label>
+            <label><span data-explain="cross-spread">Override spread</span> (¢) <span style="color:var(--ink-3);">· optional</span></label>
             <input type="number" id="arb-spread" step="0.1" placeholder="auto" />
           </div>
         </div>
@@ -252,12 +268,12 @@
         <div>
           <div class="arb-output">
             <div class="arb-out-card">
-              <div class="k">Before OIEC · annualised</div>
+              <div class="k" data-explain="horizon-shortening">Before OIEC · annualised</div>
               <div class="big" id="arb-ann-before">—</div>
               <div class="sub" id="arb-sub-before">—</div>
             </div>
             <div class="arb-out-card after">
-              <div class="k">After OIEC · annualised</div>
+              <div class="k" data-explain="compression-factor">After OIEC · annualised</div>
               <div class="big" id="arb-ann-after">—</div>
               <div class="sub" id="arb-sub-after">—</div>
             </div>
@@ -265,22 +281,22 @@
 
           <div class="arb-compare-bar">
             <div class="row">
-              <div class="lbl">Spread · spot</div>
+              <div class="lbl" data-explain="cross-spread">Spread · spot</div>
               <div class="bar"><div class="fill" id="arb-bar-sb"></div></div>
               <div class="val" id="arb-val-sb">—</div>
             </div>
             <div class="row accent">
-              <div class="lbl">Spread · OIEC</div>
+              <div class="lbl" data-explain="cross-spread">Spread · OIEC</div>
               <div class="bar"><div class="fill" id="arb-bar-sa"></div></div>
               <div class="val" id="arb-val-sa">—</div>
             </div>
             <div class="row">
-              <div class="lbl">Horizon · before</div>
+              <div class="lbl" data-explain="ttr">Horizon · before</div>
               <div class="bar"><div class="fill" id="arb-bar-hb"></div></div>
               <div class="val" id="arb-val-hb">—</div>
             </div>
             <div class="row accent">
-              <div class="lbl">Horizon · after</div>
+              <div class="lbl" data-explain="tau">Horizon · after</div>
               <div class="bar"><div class="fill" id="arb-bar-ha"></div></div>
               <div class="val" id="arb-val-ha">—</div>
             </div>
@@ -290,7 +306,7 @@
     </div>
 
     <div class="scrubber-card">
-      <h3 class="display">History scrubber</h3>
+      <h3 class="display"><span data-explain="scrubber">History scrubber</span></h3>
       <p>Scrub the 150-day timeline to see how price, Greeks, and arbitrage economics evolved. Press play to replay.</p>
 
       <div class="scrubber-controls">

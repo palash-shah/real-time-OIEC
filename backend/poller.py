@@ -38,9 +38,10 @@ from pricing import bvix, surface, variance_swap_strike
 log = logging.getLogger(__name__)
 
 
-POLL_INTERVAL_SEC = float(os.environ.get("OIEC_POLL_INTERVAL", "3.0"))
-HISTORY_POINTS    = 150
-SYNTHETIC_DAYS    = 150    # age in days of the synthetic prefill
+POLL_INTERVAL_SEC = float(os.environ.get("OIEC_POLL_INTERVAL", "1.0"))
+HISTORY_POINTS    = 600     # ~10 minutes @ 1Hz, enough to populate all timeframes
+SYNTHETIC_DAYS    = 60      # age of synthetic prefill (less than before; we rely on
+                            # real ticks accumulating over the session)
 
 
 class Poller:
