@@ -209,6 +209,7 @@ function route() {
   });
   // re-render current view (safe: all renderers are idempotent)
   routes[path]();
+  if (window.updateFilterRailVisibility) window.updateFilterRailVisibility(path);
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
@@ -226,21 +227,30 @@ function renderHome() {
   const grid = document.getElementById("spotlight-grid");
   grid.innerHTML = "";
   DATA.markets.forEach((m, i) => {
-    const spark = renderSparkline(m.history_prices, 240, 80);
     const el = document.createElement("div");
-    el.className = "spotlight";
+    el.className = "spotlight-card";
     el.innerHTML = `
-      <div class="venue">${m.platform}</div>
+      <div class="venue">${m.platform} · M.0${i + 1}</div>
       <div class="title">${m.name}</div>
-      <div class="price mono">${fmt.pctRaw(m.current_price, 1)}<span class="unit">¢</span></div>
-      <div class="meta">
-        <div><span class="k">σ̂</span><span class="v">${fmt.num(m.sigma_hat, 3)}</span></div>
-        <div><span class="k">BVIX</span><span class="v">${fmt.num(m.bvix_model_free, 3)}</span></div>
-        <div><span class="k">TTR</span><span class="v">${fmt.years(m.time_to_resolution_years)}</span></div>
+      <div class="bvix-mini">
+        <span><span class="k">σ̂</span> <span class="v">${fmt.num(m.sigma_hat, 3)}</span></span>
+        <span><span class="k">BVIX</span> <span class="v">${fmt.num(m.bvix_model_free, 3)}</span></span>
+        <span><span class="k">τ</span> <span class="v">${fmt.num(m.tau, 2)}y</span></span>
       </div>
-      <div class="spark">${spark}</div>
+      <div class="prob-row">
+        <div>
+          <div class="prob">${fmt.pctRaw(m.current_price, 1)}<span class="unit">¢</span></div>
+          <div class="chance">${(m.current_price * 100).toFixed(0)}% chance</div>
+        </div>
+      </div>
+      <div class="yes-no">
+        <button class="yn-btn yes">Buy Yes · ${fmt.pctRaw(m.current_price, 0)}¢</button>
+        <button class="yn-btn no">Buy No · ${fmt.pctRaw(1 - m.current_price, 0)}¢</button>
+      </div>
     `;
-    el.addEventListener("click", () => {
+    el.addEventListener("click", (ev) => {
+      // Don't hijack clicks on Yes/No buttons (they'd otherwise jump to markets too)
+      if (ev.target.closest(".yn-btn")) return;
       sessionStorage.setItem("oiec:selectedMarket", String(i));
       location.hash = "#/markets";
     });
@@ -872,6 +882,50 @@ function updateTimeframeButtons() {
     .forEach(b => b.classList.toggle("active", parseInt(b.dataset.tf, 10) === historyChartState.timeframeSec));
 }
 
+/* Filter rail — tags on the card DOM are used for client-side filtering.
+   Each market card gets a data-tags attribute based on its metadata
+   (keyword matching on the title and platform). Clicking a pill hides
+   any card whose tags don't include the pill's filter key. */
+(function initFilterRail() {
+  function tagsFor(m) {
+    const t = (m.name || "").toLowerCase();
+    const venue = (m.platform || "").toLowerCase();
+    const tags = ["all", venue];
+    if (/election|president|democrat|republican|senate|congress|party|vance|newsom/i.test(t)) tags.push("politics");
+    if (/fed|fomc|rate|cpi|inflation|unemployment/i.test(t)) tags.push("fed");
+    if (/nominee|primary|caucus/i.test(t)) tags.push("primary");
+    return tags;
+  }
+
+  function applyFilter(key) {
+    // Home spotlights and Markets grid both use cards indexed by DATA.markets order
+    document.querySelectorAll(".spotlight-card, .market-card").forEach((card, i) => {
+      const marketIdx = i % DATA.markets.length; // same index across both grids
+      const m = DATA.markets[marketIdx];
+      if (!m) return;
+      const tags = tagsFor(m);
+      const show = key === "all" || tags.includes(key);
+      card.style.display = show ? "" : "none";
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("#filter-rail button[data-filter]");
+    if (!btn) return;
+    document.querySelectorAll("#filter-rail button").forEach(b =>
+      b.classList.toggle("active", b === btn));
+    applyFilter(btn.dataset.filter);
+  });
+
+  // Hide the rail on screens where it doesn't make sense (Surface Lab, Arb,
+  // market detail). Only show on Home and Markets.
+  window.updateFilterRailVisibility = function(route) {
+    const rail = document.querySelector(".filter-rail");
+    if (!rail) return;
+    rail.style.display = (route === "/" || route === "/markets") ? "" : "none";
+  };
+})();
+
 
 function drawBVIXChart(m) {
   if (!window.Chart) return;
@@ -1088,19 +1142,17 @@ function renderBVIX() {
   sum.innerHTML = "";
   DATA.markets.forEach(m => {
     const el = document.createElement("div");
-    el.className = "bvix-card";
+    el.className = "card";
     const diff = m.bvix_model_based - m.bvix_model_free;
+    const diffBp = (diff * 1000).toFixed(1);
+    const chipClass = diff >= 0 ? "up" : "";
     el.innerHTML = `
       <div class="venue">${m.platform}</div>
       <div class="title">${m.name}</div>
-      <div class="ring">
-        <div class="ring-val mono">${fmt.num(m.bvix_model_free, 3)}</div>
-      </div>
-      <div class="mono" style="text-align:center; font-size:11px; color: var(--ink-2); margin-top:8px;">
-        model-based ${fmt.num(m.bvix_model_based, 3)}
-        <span style="color: ${diff > 0 ? 'var(--neg)' : 'var(--pos)'}; margin-left:8px;">
-          ${diff > 0 ? '+' : ''}${(diff * 1000).toFixed(1)}bp
-        </span>
+      <div class="bvix-num">${fmt.num(m.bvix_model_free, 3)}</div>
+      <div class="bvix-sub">
+        <span>model-based ${fmt.num(m.bvix_model_based, 3)}</span>
+        <span class="delta-chip ${chipClass}">${diff >= 0 ? "+" : ""}${diffBp}bp</span>
       </div>
     `;
     sum.appendChild(el);
