@@ -97,14 +97,11 @@ function backendURL(path) {
 }
 
 async function loadData() {
-  // 1. sidecar data.js (embedded fallback for static hosting)
-  if (window.OIEC_DATA && window.OIEC_DATA.markets && window.OIEC_DATA.markets.length) {
-    DATA = window.OIEC_DATA;
-    SRC = "data.js";
-    // Don't return yet — if a backend is configured, we'll upgrade via fetch below.
-  }
+  // Skip data.js fallback — user explicitly wants to see errors rather than
+  // render stale embedded numbers. The old data.js was showing synthetic-seed
+  // prices that drifted to unrealistic values and confused everything.
 
-  // 2. fetch from backend (works cross-origin thanks to CORS)
+  // 1. Fetch from backend (cross-origin via CORS when Pages → Render)
   const base = backendUrl();
   if (base || location.protocol !== "file:") {
     try {
@@ -114,30 +111,30 @@ async function loadData() {
         SRC = base ? "backend" : "data.json";
         return;
       }
-    } catch (_) { /* fall through */ }
-  }
-
-  // 3. if we already loaded from data.js, stick with it
-  if (DATA) return;
-
-  // 4. inline embed (ultimate fallback — works even on file://)
-  const embed = document.getElementById("oiec-embed");
-  if (embed) {
-    const parsed = JSON.parse(embed.textContent);
-    if (parsed && parsed.markets && parsed.markets.length) {
-      DATA = parsed;
-      SRC = "embedded";
-      return;
+    } catch (err) {
+      console.warn("[OIEC] backend fetch failed:", err);
     }
   }
+
+  // 2. Only as an absolute last resort (e.g. serving dashboard from file://
+  //    without a backend), use the inline embed.
+  const embed = document.getElementById("oiec-embed");
+  if (embed) {
+    try {
+      const parsed = JSON.parse(embed.textContent);
+      if (parsed && parsed.markets && parsed.markets.length) {
+        DATA = parsed;
+        SRC = "embedded";
+        console.warn("[OIEC] using embedded fallback data; start the backend for live prices");
+        return;
+      }
+    } catch (_) {}
+  }
+
   throw new Error(
-    "No data source found.\n\n" +
-    "If you deployed the dashboard to GitHub Pages, edit config.js and set\n" +
-    "backend_url to your Render service URL (e.g. https://oiec-backend.onrender.com).\n\n" +
-    "For local development:\n" +
-    "  1. Serve the folder:  python3 -m http.server\n" +
-    "  2. Place data.js next to index.html\n" +
-    "  3. Re-run embed_data.py to inline data.json"
+    "Can't reach the backend.\n\n" +
+    "If you're on GitHub Pages, check that dashboard-v2/config.js points at\n" +
+    "your Render service URL. Then hard-reload (Cmd+Shift+R) to bust the cache."
   );
 }
 
@@ -458,25 +455,21 @@ const LWC_COLORS = {
 function mountHistoryChart(containerId) {
   if (!window.LightweightCharts) return null;
   const el = document.getElementById(containerId);
-  // Only empty the container if it doesn't already contain a lightweight-charts
-  // canvas — if it does, we're about to double-mount, which is a bug elsewhere.
-  if (!el.querySelector("table, canvas")) {
-    el.innerHTML = "";
-  } else {
-    // Guard: a chart already lives here. Nuke it before remount to avoid leaks.
-    el.innerHTML = "";
-  }
+  // Always empty first — safe because drawHistoryChart has a fast-path
+  // that skips this function entirely for same-market updates.
+  el.innerHTML = "";
   const chart = LightweightCharts.createChart(el, {
     width:  el.clientWidth,
     height: el.clientHeight || 300,
     layout: { background: { color: "transparent" }, textColor: LWC_COLORS.text,
               fontFamily: '"JetBrains Mono", monospace', fontSize: 10.5,
-              // License is satisfied by the "Charts · TradingView" link in the footer
               attributionLogo: false },
     grid:   { vertLines: { color: LWC_COLORS.grid, style: 1 },
               horzLines: { color: LWC_COLORS.grid, style: 1 } },
-    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.10, bottom: 0.22 }},
-    leftPriceScale:  { borderVisible: false, scaleMargins: { top: 0.10, bottom: 0.22 }, visible: true },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.10, bottom: 0.18 }},
+    // Single-axis chart — no left scale, no overlays. The crosshair readout
+    // panel displays σ̂ and BVIX from the backend data, not from a chart line.
+    leftPriceScale:  { visible: false },
     timeScale: {
       borderVisible: false,
       timeVisible: true,
@@ -484,14 +477,10 @@ function mountHistoryChart(containerId) {
       rightOffset: 4,
       barSpacing: 6,
       minBarSpacing: 2,
-      // Key: when new bars arrive, don't shift the view unless user is
-      // already at the rightmost position. This prevents surprise jumps.
       shiftVisibleRangeOnNewBar: true,
       rightBarStaysOnScroll: true,
-      // Lock bar range and don't let the user zoom so far out that they
-      // see "1970" labels or blank space on either side of the data.
       fixLeftEdge: true,
-      fixRightEdge: false,     // we need to add new bars on the right
+      fixRightEdge: false,
       lockVisibleTimeRangeOnResize: true,
     },
     crosshair: {
@@ -499,8 +488,6 @@ function mountHistoryChart(containerId) {
       vertLine: { color: "#c7c7cc", width: 1, style: 3, labelBackgroundColor: LWC_COLORS.line },
       horzLine: { color: "#c7c7cc", width: 1, style: 3, labelBackgroundColor: LWC_COLORS.line },
     },
-    // Allow pinch/wheel zoom on time axis — but disable vertical axis zoom
-    // which causes jarring "zoom out of universe" behavior.
     handleScale:  { axisPressedMouseMove: { time: true, price: false },
                     mouseWheel: true, pinch: true },
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
@@ -579,19 +566,11 @@ function drawHistoryChart(m) {
   }));
   historyChartState.rawPoints = raw;
 
-  historyChartState.sigmaSeries = computeRollingSigma(raw, 20);
-  historyChartState.bvixSeries  = historyChartState.sigmaSeries.map((s, i) => ({
-    time:  s.time,
-    value: s.value * Math.sqrt(m.tau) * Math.sqrt(Math.max(raw[i].value * (1 - raw[i].value), 1e-6)) * 2,
-  }));
-
   // Slow path: market changed or first draw. Teardown + rebuild.
   if (historyChartState.chart) {
     historyChartState.chart.remove();
     historyChartState.chart = null;
     historyChartState.series = null;
-    historyChartState.sigmaSeries_api = null;
-    historyChartState.bvixSeries_api = null;
   }
   historyChartState.chart = mountHistoryChart("d-chart-history");
   historyChartState.marketIdx = idx;
@@ -608,36 +587,6 @@ function drawHistoryChart(m) {
     .forEach(btn => btn.classList.toggle("active", btn.dataset.kind === historyChartState.kind));
 }
 
-/** Rolling σ̂ proxy — compute σ from consecutive-log-return windows over the raw history. */
-function computeRollingSigma(raw, windowN) {
-  const out = [];
-  if (raw.length < 2) return out;
-  // dt_years between consecutive points
-  const dts = [];
-  for (let i = 1; i < raw.length; i++) {
-    dts.push(Math.max(1, raw[i].time - raw[i - 1].time) / (365.25 * 86400));
-  }
-  const avgDt = dts.reduce((a, b) => a + b, 0) / dts.length;
-  // Jacobi: dP = σ · √(P(1-P)) · dW, so σ ≈ stdev(dP / √(P(1-P))) / √dt
-  const z = [];
-  for (let i = 1; i < raw.length; i++) {
-    const p = raw[i - 1].value;
-    const dP = raw[i].value - raw[i - 1].value;
-    const s = Math.sqrt(Math.max(p * (1 - p), 1e-6));
-    z.push(dP / s);
-  }
-  for (let i = 0; i < raw.length; i++) {
-    const start = Math.max(0, Math.min(z.length - 1, i - windowN));
-    const end   = Math.max(start + 1, Math.min(z.length, i + 1));
-    const slice = z.slice(start, end);
-    const mean  = slice.reduce((a, b) => a + b, 0) / Math.max(1, slice.length);
-    const varz  = slice.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, slice.length);
-    const sig   = Math.sqrt(varz) / Math.sqrt(avgDt);
-    out.push({ time: raw[i].time, value: Number.isFinite(sig) ? sig : 0 });
-  }
-  return out;
-}
-
 /** Adaptive candle bucket — target ~N visible candles across the full span */
 function adaptiveBucketSec(raw, targetCount) {
   if (raw.length < 2) return 60;
@@ -647,14 +596,9 @@ function adaptiveBucketSec(raw, targetCount) {
 
 function attachHistorySeries(kind) {
   if (!historyChartState.chart) return;
-  // Clear any existing series on the chart so we can rebuild the stack
   if (historyChartState.series) {
     historyChartState.chart.removeSeries(historyChartState.series);
     historyChartState.series = null;
-  }
-  if (historyChartState.sigmaSeries_api) {
-    historyChartState.chart.removeSeries(historyChartState.sigmaSeries_api);
-    historyChartState.sigmaSeries_api = null;
   }
 
   if (kind === "candle") {
@@ -677,17 +621,6 @@ function attachHistorySeries(kind) {
       priceFormat: { type: "custom", minMove: 0.001, formatter: v => (v * 100).toFixed(1) + "¢" },
     });
   }
-
-  // Rolling σ̂ overlay — subtle, left-axis, always visible regardless of mode
-  historyChartState.sigmaSeries_api = historyChartState.chart.addLineSeries({
-    color:       LWC_COLORS.sigma,
-    lineWidth:   1,
-    lineStyle:   2,          // dashed
-    priceScaleId: "left",
-    lastValueVisible: false,
-    priceLineVisible: false,
-    priceFormat: { type: "custom", minMove: 0.01, formatter: v => "σ " + v.toFixed(2) },
-  });
   historyChartState.kind = kind;
 }
 
@@ -696,9 +629,6 @@ function seedHistorySeries(raw) {
 
   if (historyChartState.kind === "candle") {
     const candles = bucketIntoCandles(raw, historyChartState.candleBucketSec);
-    // Color each candle based on close vs previous close — that's the "direction"
-    // the user actually perceives. When open==close within a bucket (sparse data),
-    // this still gives a meaningful green/red signal.
     let prevClose = candles[0] ? candles[0].open : 0;
     for (const c of candles) {
       const up = c.close > prevClose + 1e-9;
@@ -715,14 +645,8 @@ function seedHistorySeries(raw) {
     historyChartState.series.setData(raw);
   }
 
-  if (historyChartState.sigmaSeries_api && historyChartState.sigmaSeries.length) {
-    historyChartState.sigmaSeries_api.setData(historyChartState.sigmaSeries);
-  }
-
   historyChartState.lastTs = raw[raw.length - 1].time;
-  // NOTE: we intentionally don't call timeScale().fitContent() here —
-  // constrainTimeScale() (called from drawHistoryChart) sets the visible
-  // range explicitly. fitContent fights with that and causes the flash.
+  // Don't call fitContent — constrainTimeScale handles the range explicitly.
 }
 
 function updateHistoryChartIncremental(m) {
@@ -738,8 +662,6 @@ function updateHistoryChartIncremental(m) {
     value: m.history_prices[k],
   }));
   historyChartState.rawPoints = raw;
-  // Recompute σ̂ incrementally — the whole series; cheap since raw is ≤150
-  historyChartState.sigmaSeries = computeRollingSigma(raw, 20);
 
   const newPts = raw.filter(p => p.time > historyChartState.lastTs);
   if (!newPts.length) return;
@@ -748,13 +670,6 @@ function updateHistoryChartIncremental(m) {
     newPts.forEach(p => pushCandleTick(p));
   } else {
     newPts.forEach(p => historyChartState.series.update(p));
-  }
-
-  // σ̂ line: just push the matching new σ̂ points
-  if (historyChartState.sigmaSeries_api) {
-    const sigmaNew = historyChartState.sigmaSeries
-      .filter(s => s.time > historyChartState.lastTs);
-    sigmaNew.forEach(s => historyChartState.sigmaSeries_api.update(s));
   }
 
   historyChartState.lastTs = newPts[newPts.length - 1].time;
@@ -820,33 +735,37 @@ function attachCrosshairReadout() {
   }
   historyChartState.chart.subscribeCrosshairMove((param) => {
     if (!param || !param.time || !param.seriesData || param.seriesData.size === 0) {
+      // No hover — show the latest point in "LIVE" mode
       const last = historyChartState.rawPoints[historyChartState.rawPoints.length - 1];
-      const sig  = historyChartState.sigmaSeries[historyChartState.sigmaSeries.length - 1];
       if (!last) return;
-      readout.innerHTML = formatReadout(last.time, last.value, sig ? sig.value : 0, "now");
+      readout.innerHTML = formatReadout(last.time, last.value, "now");
       return;
     }
-    // Get values at hovered time
-    let priceVal = null, sigmaVal = 0;
+    // Hover mode — pull the value at this time from the price series
+    let priceVal = null;
     param.seriesData.forEach((v, series) => {
       if (series === historyChartState.series) {
         priceVal = v.value ?? v.close;
-      } else if (series === historyChartState.sigmaSeries_api) {
-        sigmaVal = v.value ?? 0;
       }
     });
     if (priceVal === null) return;
-    readout.innerHTML = formatReadout(param.time, priceVal, sigmaVal, "hover");
+    readout.innerHTML = formatReadout(param.time, priceVal, "hover");
   });
 }
 
-function formatReadout(time, price, sigma, mode) {
+function formatReadout(time, price, mode) {
   const d = new Date(time * 1000);
   const tag = mode === "now" ? "LIVE" : "at";
   const m = DATA.markets[historyChartState.marketIdx];
-  const tau = m ? m.tau : 0.25;
-  const instVar = Math.max(price * (1 - price), 1e-6);
-  const bvix = sigma * Math.sqrt(tau) * Math.sqrt(instVar) * 2;
+  if (!m) {
+    return `<div class="cr-tag">${tag}</div><div class="cr-time">—</div>
+            <span class="cr-kv"><span class="k">P</span><span class="v">${(price * 100).toFixed(2)}¢</span></span>`;
+  }
+  // σ̂ and BVIX come from the backend's calibrated values — not computed per-point.
+  // These are the "current" regime values; historical σ̂/BVIX aren't in the payload
+  // (would require backend-side storage which we deliberately keep stateless for now).
+  const sigma = m.sigma_hat;
+  const bvix  = m.bvix_model_free;
   return `
     <div class="cr-tag">${tag}</div>
     <div class="cr-time">${d.toUTCString().slice(5, 22)} UTC</div>
@@ -873,46 +792,6 @@ function formatReadout(time, price, sigma, mode) {
   });
 })();
 
-/* Fullscreen toggle for any chart panel with [data-fullscreen-panel] */
-(function initFullscreenToggle() {
-  document.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-fullscreen-target]");
-    if (!btn) return;
-    const targetId = btn.dataset.fullscreenTarget;
-    const panel = document.querySelector(`[data-fullscreen-panel="${targetId}"]`);
-    if (!panel) return;
-
-    const isFs = document.fullscreenElement === panel;
-    if (isFs) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      // Use the browser Fullscreen API — enters true fullscreen including escape key
-      panel.requestFullscreen({ navigationUI: "hide" }).catch((err) => {
-        console.warn("[OIEC] fullscreen not available:", err);
-      });
-    }
-  });
-
-  // Let the chart resize when we enter/exit fullscreen — the ResizeObserver
-  // on the container picks this up automatically, but we also nudge the
-  // visible time range so it doesn't look squeezed against one edge.
-  document.addEventListener("fullscreenchange", () => {
-    if (!historyChartState.chart) return;
-    // Small delay so the browser finishes animating the transition before
-    // lightweight-charts recomputes geometry. Without this the chart can
-    // end up drawn at the old size.
-    setTimeout(() => {
-      if (historyChartState.chart && historyChartState.rawPoints.length) {
-        const raw = historyChartState.rawPoints;
-        const first = raw[0].time;
-        const last = raw[raw.length - 1].time;
-        try {
-          historyChartState.chart.timeScale().setVisibleRange({ from: first, to: last + 30 });
-        } catch (_) { /* ok */ }
-      }
-    }, 200);
-  });
-})();
 
 function drawBVIXChart(m) {
   if (!window.Chart) return;
