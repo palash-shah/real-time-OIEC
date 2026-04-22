@@ -470,7 +470,9 @@ function mountHistoryChart(containerId) {
     width:  el.clientWidth,
     height: el.clientHeight || 300,
     layout: { background: { color: "transparent" }, textColor: LWC_COLORS.text,
-              fontFamily: '"JetBrains Mono", monospace', fontSize: 10.5 },
+              fontFamily: '"JetBrains Mono", monospace', fontSize: 10.5,
+              // License is satisfied by the "Charts · TradingView" link in the footer
+              attributionLogo: false },
     grid:   { vertLines: { color: LWC_COLORS.grid, style: 1 },
               horzLines: { color: LWC_COLORS.grid, style: 1 } },
     rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.10, bottom: 0.22 }},
@@ -868,6 +870,47 @@ function formatReadout(time, price, sigma, mode) {
     seedHistorySeries(historyChartState.rawPoints);
     document.querySelectorAll('.chart-toggle[data-target="d-chart-history"] button')
       .forEach(b => b.classList.toggle("active", b.dataset.kind === kind));
+  });
+})();
+
+/* Fullscreen toggle for any chart panel with [data-fullscreen-panel] */
+(function initFullscreenToggle() {
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-fullscreen-target]");
+    if (!btn) return;
+    const targetId = btn.dataset.fullscreenTarget;
+    const panel = document.querySelector(`[data-fullscreen-panel="${targetId}"]`);
+    if (!panel) return;
+
+    const isFs = document.fullscreenElement === panel;
+    if (isFs) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      // Use the browser Fullscreen API — enters true fullscreen including escape key
+      panel.requestFullscreen({ navigationUI: "hide" }).catch((err) => {
+        console.warn("[OIEC] fullscreen not available:", err);
+      });
+    }
+  });
+
+  // Let the chart resize when we enter/exit fullscreen — the ResizeObserver
+  // on the container picks this up automatically, but we also nudge the
+  // visible time range so it doesn't look squeezed against one edge.
+  document.addEventListener("fullscreenchange", () => {
+    if (!historyChartState.chart) return;
+    // Small delay so the browser finishes animating the transition before
+    // lightweight-charts recomputes geometry. Without this the chart can
+    // end up drawn at the old size.
+    setTimeout(() => {
+      if (historyChartState.chart && historyChartState.rawPoints.length) {
+        const raw = historyChartState.rawPoints;
+        const first = raw[0].time;
+        const last = raw[raw.length - 1].time;
+        try {
+          historyChartState.chart.timeScale().setVisibleRange({ from: first, to: last + 30 });
+        } catch (_) { /* ok */ }
+      }
+    }, 200);
   });
 })();
 
@@ -1344,7 +1387,8 @@ function mountScrubChart() {
   const chart = LightweightCharts.createChart(el, {
     width: el.clientWidth, height: el.clientHeight || 200,
     layout: { background: { color: "transparent" }, textColor: "#6e6e73",
-              fontFamily: '"JetBrains Mono", monospace', fontSize: 10 },
+              fontFamily: '"JetBrains Mono", monospace', fontSize: 10,
+              attributionLogo: false },
     grid: {
       vertLines: { color: "#eeeef2", style: 1 },
       horzLines: { color: "#eeeef2", style: 1 },

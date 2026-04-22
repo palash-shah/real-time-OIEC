@@ -1244,3 +1244,62 @@ footer .formula {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+
+/* Fullscreen toggle button in chart panel titles */
+.fullscreen-btn {
+  margin-left: auto;     /* push to far right */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--line, #e5e5ea);
+  border-radius: 5px;
+  color: var(--ink-2, #3a3a3c);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.fullscreen-btn:hover {
+  background: #f6f6f7;
+  color: var(--ink, #1d1d1f);
+  border-color: #d1d1d6;
+}
+.fullscreen-btn svg { display: block; }
+
+/* Panel title layout: toggle groups + fullscreen button align right */
+.panel-title { display: flex; align-items: center; gap: 12px; }
+.panel-title small { margin-right: auto; }   /* pushes trailing controls right */
+
+/* When a chart panel enters fullscreen, make it take the whole viewport */
+.chart-panel:fullscreen {
+  background: var(--bg, #fbfbfd);
+  padding: 32px 40px 24px;
+  display: flex;
+  flex-direction: column;
+}
+.chart-panel:fullscreen .panel-title {
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+.chart-panel:fullscreen .chart-wrap {
+  flex: 1 1 auto;
+  height: auto !important;
+  min-height: 0;        /* allow flex child to shrink */
+}
+/* Safari/older Chromium vendor prefix */
+.chart-panel:-webkit-full-screen {
+  background: var(--bg, #fbfbfd);
+  padding: 32px 40px 24px;
+}
+
+/* Subtle TradingView attribution link in footer */
+.tv-attr {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.tv-attr:hover { opacity: 1; }
