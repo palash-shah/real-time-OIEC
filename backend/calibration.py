@@ -80,6 +80,11 @@ class HistoryBuffer:
         for ts, p in points:
             self.push(ts, p)
 
+    def clear(self) -> None:
+        """Drop all accumulated points — used when replacing synthetic prefill
+        with real historical data at startup."""
+        self._buf.clear()
+
     def as_lists(self) -> tuple[list[float], list[float]]:
         if not self._buf:
             return [], []

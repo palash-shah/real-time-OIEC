@@ -33,16 +33,21 @@ import httpx
 log = logging.getLogger(__name__)
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
+CLOB_BASE  = "https://clob.polymarket.com"
 
 
 @dataclass
 class PolymarketBinding:
     event_slug:    str
     event_title:   str
-    outcome_label: str           # what the user asked for ("Democratic")
-    sub_market_title: str        # the actual sub-market title we matched
-    condition_id:  str           # conditionId of the sub-market, stable
-    sub_market_slug: str         # slug of the sub-market, for debugging
+    outcome_label: str
+    sub_market_title: str
+    condition_id:  str
+    sub_market_slug: str
+    # CLOB token ID for the Yes-side outcome. Needed for the prices-history
+    # endpoint, which is keyed by token not conditionId. Populated at resolve
+    # time from the market's `clobTokenIds` field.
+    yes_token_id: Optional[str] = None
 
 
 @dataclass
@@ -98,6 +103,7 @@ class PolymarketClient:
                 sub_market_title=m.get("groupItemTitle") or m.get("question") or "",
                 condition_id=m.get("conditionId") or "",
                 sub_market_slug=m.get("slug", ""),
+                yes_token_id=self._yes_token_id(m),
             )
 
         # Multi-outcome: match on groupItemTitle (option name) preferred,
@@ -135,6 +141,7 @@ class PolymarketClient:
             sub_market_title=m.get("groupItemTitle") or m.get("question") or "",
             condition_id=m.get("conditionId") or "",
             sub_market_slug=m.get("slug", ""),
+            yes_token_id=self._yes_token_id(m),
         )
 
     # ---------- quote ----------
@@ -234,6 +241,101 @@ class PolymarketClient:
             try: return [float(x) for x in raw]
             except (TypeError, ValueError): return []
         return []
+
+    @staticmethod
+    def _yes_token_id(m: dict) -> Optional[str]:
+        """Extract the Yes-side CLOB token ID from a Gamma market dict.
+
+        `clobTokenIds` is a JSON-encoded list-of-strings on most markets,
+        ordered to match `outcomes`. We return the token corresponding to
+        the "Yes" outcome — first index for Yes/No markets, fallback to
+        index 0 when parsing fails.
+        """
+        raw = m.get("clobTokenIds") or m.get("clob_token_ids") or "[]"
+        tokens: list[str] = []
+        if isinstance(raw, str):
+            try: tokens = [str(x) for x in json.loads(raw)]
+            except json.JSONDecodeError: return None
+        elif isinstance(raw, list):
+            tokens = [str(x) for x in raw]
+        if not tokens:
+            return None
+
+        outcomes = PolymarketClient._outcomes(m)
+        # Prefer the token aligned with "Yes" outcome if present
+        for i, o in enumerate(outcomes):
+            if o.strip().lower() == "yes" and i < len(tokens):
+                return tokens[i]
+        # Fallback: first token (Gamma convention is Yes at index 0)
+        return tokens[0]
+
+    # ---------- historical prices ----------
+
+    async def fetch_history(
+        self,
+        binding: PolymarketBinding,
+        *,
+        interval: str = "1m",
+        fidelity_minutes: Optional[int] = None,
+    ) -> list[tuple[float, float]]:
+        """Fetch historical prices for the Yes side of a binding.
+
+        Returns a list of (unix_seconds, price) tuples, sorted ascending
+        in time. Empty list on any failure — callers fall back to synthetic
+        prefill.
+
+        interval: one of "1m" (1 month), "1w" (1 week), "1d" (1 day),
+                  "6h", "1h", "max". Polymarket's CLOB accepts these
+                  canonical values.
+        fidelity_minutes: sampling step inside the interval. Smaller = more
+                  points. For a 1-month interval, fidelity=60 gives hourly
+                  samples (~720 points), fidelity=15 gives 15-min samples
+                  (~2880 points). None lets the server pick a default.
+        """
+        if not binding.yes_token_id:
+            log.warning(
+                "Polymarket fetch_history: binding %r has no yes_token_id; "
+                "cannot fetch history (did Gamma omit clobTokenIds?)",
+                binding.event_slug,
+            )
+            return []
+
+        params: dict = {"market": binding.yes_token_id, "interval": interval}
+        if fidelity_minutes is not None:
+            params["fidelity"] = str(fidelity_minutes)
+
+        try:
+            r = await self._client.get(f"{CLOB_BASE}/prices-history", params=params)
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPError as e:
+            log.warning(
+                "Polymarket fetch_history(%s, %s) failed: %s",
+                binding.event_slug, interval, e,
+            )
+            return []
+
+        points = data.get("history") if isinstance(data, dict) else None
+        if not points:
+            log.info(
+                "Polymarket fetch_history(%s, %s): empty history",
+                binding.event_slug, interval,
+            )
+            return []
+
+        # CLOB returns {"t": unix_seconds, "p": price_float}
+        out: list[tuple[float, float]] = []
+        for pt in points:
+            t = pt.get("t")
+            p = pt.get("p")
+            if t is None or p is None:
+                continue
+            try:
+                out.append((float(t), float(p)))
+            except (TypeError, ValueError):
+                continue
+        out.sort(key=lambda x: x[0])
+        return out
 
 
 def _as_float(x) -> float:

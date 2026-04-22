@@ -87,6 +87,10 @@ class Poller:
             log.info("No Kalshi credentials configured; Polymarket-only mode")
 
         await self._resolve_markets()
+        # Pull real history from Polymarket's CLOB prices-history endpoint.
+        # This replaces the synthetic prefill for any market that has a bound
+        # Polymarket token. Synthetic only fills markets we couldn't resolve.
+        await self._prefill_real_history()
         self._seed_synthetic_history()
         asyncio.create_task(self._run_forever())
 
@@ -284,6 +288,46 @@ class Poller:
         if p: venues.append("Polymarket")
         if k: venues.append("Kalshi")
         return " · ".join(venues) if venues else "—"
+
+    async def _prefill_real_history(self) -> None:
+        """Replace synthetic prefill with real Polymarket history for any
+        market we successfully bound. Uses the CLOB prices-history endpoint.
+
+        Strategy: fetch "1m" (one month) of history at hourly fidelity.
+        That gives roughly 30d × 24 = 720 points per market, enough to fill
+        the 300-point buffer with real data for most markets. For markets
+        newer than a month, we get whatever is available.
+
+        This is called ONCE at startup; it's fine that it takes 1-2 seconds
+        per market (all sequential to avoid rate limits).
+        """
+        if not self.poly:
+            return
+        for m in MARKETS:
+            b = self.poly_bind.get(m.idx)
+            if not b or not b.yes_token_id:
+                continue
+            try:
+                pts = await self.poly.fetch_history(b, interval="1m", fidelity_minutes=60)
+            except Exception as e:
+                log.warning("prefill_real_history failed for %r: %s", m.name, e)
+                continue
+            if not pts:
+                log.info("No real history available for %r; keeping synthetic", m.name)
+                continue
+            # Keep only the most recent HISTORY_POINTS
+            pts = pts[-HISTORY_POINTS:]
+            buf = self.buffers[m.idx]
+            buf.clear()
+            for t, p in pts:
+                buf.push(t, p)
+            log.info(
+                "Prefilled %d real points for %r (first=%s, last=%s, span=%.1fd)",
+                len(pts), m.name,
+                time.strftime("%Y-%m-%d %H:%M", time.gmtime(pts[0][0])),
+                time.strftime("%Y-%m-%d %H:%M", time.gmtime(pts[-1][0])),
+                (pts[-1][0] - pts[0][0]) / 86400,
+            )
 
     def _seed_synthetic_history(self) -> None:
         """Prefill each buffer with a plausible Jacobi path so the dashboard
