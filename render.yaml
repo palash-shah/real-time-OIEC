@@ -28,7 +28,7 @@ services:
       - key: KALSHI_ENV
         value: prod
       - key: OIEC_POLL_INTERVAL
-        value: "1.0"
+        value: "5.0"
       - key: OIEC_LOG_LEVEL
         value: INFO
       # Set this to your GitHub Pages URL after the Pages site is up:
