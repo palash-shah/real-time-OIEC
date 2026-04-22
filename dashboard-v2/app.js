@@ -458,7 +458,14 @@ const LWC_COLORS = {
 function mountHistoryChart(containerId) {
   if (!window.LightweightCharts) return null;
   const el = document.getElementById(containerId);
-  el.innerHTML = "";
+  // Only empty the container if it doesn't already contain a lightweight-charts
+  // canvas — if it does, we're about to double-mount, which is a bug elsewhere.
+  if (!el.querySelector("table, canvas")) {
+    el.innerHTML = "";
+  } else {
+    // Guard: a chart already lives here. Nuke it before remount to avoid leaks.
+    el.innerHTML = "";
+  }
   const chart = LightweightCharts.createChart(el, {
     width:  el.clientWidth,
     height: el.clientHeight || 300,
@@ -467,17 +474,34 @@ function mountHistoryChart(containerId) {
     grid:   { vertLines: { color: LWC_COLORS.grid, style: 1 },
               horzLines: { color: LWC_COLORS.grid, style: 1 } },
     rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.10, bottom: 0.22 }},
-    // Left scale for the secondary (σ̂) series
     leftPriceScale:  { borderVisible: false, scaleMargins: { top: 0.10, bottom: 0.22 }, visible: true },
-    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false,
-                 rightOffset: 4, barSpacing: 6, minBarSpacing: 2 },
+    timeScale: {
+      borderVisible: false,
+      timeVisible: true,
+      secondsVisible: false,
+      rightOffset: 4,
+      barSpacing: 6,
+      minBarSpacing: 2,
+      // Key: when new bars arrive, don't shift the view unless user is
+      // already at the rightmost position. This prevents surprise jumps.
+      shiftVisibleRangeOnNewBar: true,
+      rightBarStaysOnScroll: true,
+      // Lock bar range and don't let the user zoom so far out that they
+      // see "1970" labels or blank space on either side of the data.
+      fixLeftEdge: true,
+      fixRightEdge: false,     // we need to add new bars on the right
+      lockVisibleTimeRangeOnResize: true,
+    },
     crosshair: {
-      mode: 1,   // normal — follows cursor, not the nearest data point
+      mode: 1,
       vertLine: { color: "#c7c7cc", width: 1, style: 3, labelBackgroundColor: LWC_COLORS.line },
       horzLine: { color: "#c7c7cc", width: 1, style: 3, labelBackgroundColor: LWC_COLORS.line },
     },
-    handleScale:  { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
-    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
+    // Allow pinch/wheel zoom on time axis — but disable vertical axis zoom
+    // which causes jarring "zoom out of universe" behavior.
+    handleScale:  { axisPressedMouseMove: { time: true, price: false },
+                    mouseWheel: true, pinch: true },
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
   });
 
   const ro = new ResizeObserver(() => {
@@ -489,8 +513,49 @@ function mountHistoryChart(containerId) {
 }
 
 /**
+ * After seeding data, pin the visible time range to the actual data span,
+ * and subscribe to range-change events so we can clamp the user's manual
+ * zooms. This fixes: when the user zooms out past the data span,
+ * lightweight-charts renders blank regions with axis labels drifting into
+ * "1970" territory. We prevent that by clamping.
+ */
+function constrainTimeScale(raw) {
+  if (!historyChartState.chart || !raw.length) return;
+  const tFirst = raw[0].time;
+  const tLast  = raw[raw.length - 1].time;
+  const ts = historyChartState.chart.timeScale();
+
+  // Show from the first real point to "now" with a small right pad
+  ts.setVisibleRange({ from: tFirst, to: tLast + 30 });
+
+  // Guard: when user zooms, snap range back into the allowed window
+  ts.subscribeVisibleTimeRangeChange((r) => {
+    if (!r) return;
+    // If the requested range falls outside the data span by more than
+    // ~2x the data width, clamp it. We allow a little extra breathing
+    // room on the right (future) but never on the left (past 1970).
+    const span = Math.max(60, tLast - tFirst);
+    const minFrom = tFirst - span * 0.1;
+    const maxTo   = tLast + span * 2.0;
+    let from = r.from, to = r.to;
+    let clamped = false;
+    if (from < minFrom) { from = minFrom; clamped = true; }
+    if (to   > maxTo)   { to   = maxTo;   clamped = true; }
+    // Also prevent zooming in so far that we only see < 2 bars
+    if ((to - from) < 20) { from = r.from; to = from + 20; clamped = true; }
+    if (clamped) {
+      // Important: defer to next microtask to avoid recursion
+      Promise.resolve().then(() => {
+        try { ts.setVisibleRange({ from, to }); } catch (_) {}
+      });
+    }
+  });
+}
+
+/**
  * Render the price-history panel for market m.
- * Full rebuild when market changes; otherwise delegated to updateHistoryChartIncremental.
+ * Idempotent: if the chart already exists for this market, delegates to
+ * the incremental update path — never tears down the DOM.
  */
 function drawHistoryChart(m) {
   if (!window.LightweightCharts) {
@@ -499,44 +564,44 @@ function drawHistoryChart(m) {
   }
 
   const idx = DATA.markets.indexOf(m);
+
+  // Fast path: chart exists for this market → just update, no rebuild
+  if (historyChartState.chart && historyChartState.marketIdx === idx && historyChartState.series) {
+    updateHistoryChartIncremental(m);
+    return;
+  }
+
   const raw = m.history_timestamps.map((iso, k) => ({
     time:  Math.floor(new Date(iso).getTime() / 1000),
     value: m.history_prices[k],
   }));
   historyChartState.rawPoints = raw;
 
-  // Sigma history is a constant per payload, so derive a "sigma-over-history"
-  // proxy by sliding a window. The backend doesn't ship historical σ̂, so we
-  // compute a local rolling σ̂ over the same window here. This gives an
-  // impression of vol-regime shifts that an investor will actually notice.
   historyChartState.sigmaSeries = computeRollingSigma(raw, 20);
   historyChartState.bvixSeries  = historyChartState.sigmaSeries.map((s, i) => ({
     time:  s.time,
     value: s.value * Math.sqrt(m.tau) * Math.sqrt(Math.max(raw[i].value * (1 - raw[i].value), 1e-6)) * 2,
   }));
 
-  const marketChanged = historyChartState.marketIdx !== idx;
-  if (marketChanged || !historyChartState.chart) {
-    if (historyChartState.chart) {
-      historyChartState.chart.remove();
-      historyChartState.chart = null;
-      historyChartState.series = null;
-      historyChartState.sigmaSeries_api = null;
-      historyChartState.bvixSeries_api = null;
-    }
-    historyChartState.chart = mountHistoryChart("d-chart-history");
-    historyChartState.marketIdx = idx;
-    historyChartState.lastTs = 0;
-    historyChartState.pendingCandle = null;
-    // Adaptive bucket size: aim for ~60 candles visible
-    historyChartState.candleBucketSec = adaptiveBucketSec(raw, 60);
-    attachHistorySeries(historyChartState.kind);
-    attachCrosshairReadout();
+  // Slow path: market changed or first draw. Teardown + rebuild.
+  if (historyChartState.chart) {
+    historyChartState.chart.remove();
+    historyChartState.chart = null;
+    historyChartState.series = null;
+    historyChartState.sigmaSeries_api = null;
+    historyChartState.bvixSeries_api = null;
   }
+  historyChartState.chart = mountHistoryChart("d-chart-history");
+  historyChartState.marketIdx = idx;
+  historyChartState.lastTs = 0;
+  historyChartState.pendingCandle = null;
+  historyChartState.candleBucketSec = adaptiveBucketSec(raw, 60);
+  attachHistorySeries(historyChartState.kind);
+  attachCrosshairReadout();
 
   seedHistorySeries(raw);
+  constrainTimeScale(raw);
 
-  // Sync the toggle UI to our state
   document.querySelectorAll('.chart-toggle[data-target="d-chart-history"] button')
     .forEach(btn => btn.classList.toggle("active", btn.dataset.kind === historyChartState.kind));
 }
@@ -653,7 +718,9 @@ function seedHistorySeries(raw) {
   }
 
   historyChartState.lastTs = raw[raw.length - 1].time;
-  historyChartState.chart.timeScale().fitContent();
+  // NOTE: we intentionally don't call timeScale().fitContent() here —
+  // constrainTimeScale() (called from drawHistoryChart) sets the visible
+  // range explicitly. fitContent fights with that and causes the flash.
 }
 
 function updateHistoryChartIncremental(m) {
