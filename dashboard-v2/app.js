@@ -224,6 +224,15 @@ function renderHome() {
   const el = document.getElementById("home-bignum");
   el.innerHTML = avgCompression.toFixed(0) + '<span class="suffix">×</span>';
 
+  // Update the spotlight section header with the live market count (word form
+  // reads more naturally than a digit for counts < 20)
+  const countEl = document.getElementById("spotlight-count");
+  if (countEl) {
+    const n = DATA.markets.length;
+    const words = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve"];
+    countEl.textContent = words[n] ? words[n].charAt(0).toUpperCase() + words[n].slice(1) : String(n);
+  }
+
   const grid = document.getElementById("spotlight-grid");
   grid.innerHTML = "";
   DATA.markets.forEach((m, i) => {

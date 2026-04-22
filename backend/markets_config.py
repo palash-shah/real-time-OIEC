@@ -69,21 +69,11 @@ MARKETS: list[OIECConfig] = [
         ttr_years=2.20,
         primary="polymarket",
     ),
-    # 4. Republican Presidential Nominee 2028 — JD Vance (same event, different outcome)
+
+    # ===== FED / RATES =====
+    # 4. Fed decision — near-term
     OIECConfig(
         idx=3,
-        name="JD Vance — Republican Presidential Nominee 2028",
-        poly_slug="republican-presidential-nominee-2028",
-        poly_outcome="JD Vance",
-        tau_years=0.22,
-        ttr_years=2.20,
-        primary="polymarket",
-    ),
-
-    # ===== FED / RATES: SHORT-DATED =====
-    # 5. Fed decision — No change outcome (near-term)
-    OIECConfig(
-        idx=4,
         name="Fed holds rates at April 2026 FOMC",
         poly_slug="fed-decision-in-april",
         poly_outcome="No change",
@@ -91,9 +81,9 @@ MARKETS: list[OIECConfig] = [
         ttr_years=0.04,
         primary="polymarket",
     ),
-    # 6. How many Fed rate cuts in 2026 — zero cuts
+    # 5. Zero Fed rate cuts in 2026
     OIECConfig(
-        idx=5,
+        idx=4,
         name="Zero Fed rate cuts in 2026",
         poly_slug="how-many-fed-rate-cuts-in-2026",
         poly_outcome="0 (0 bps)",
@@ -101,9 +91,9 @@ MARKETS: list[OIECConfig] = [
         ttr_years=0.70,
         primary="polymarket",
     ),
-    # 7. How many Fed rate cuts in 2026 — one cut
+    # 6. One Fed rate cut in 2026
     OIECConfig(
-        idx=6,
+        idx=5,
         name="One Fed rate cut in 2026",
         poly_slug="how-many-fed-rate-cuts-in-2026",
         poly_outcome="1 (25 bps)",
@@ -112,34 +102,10 @@ MARKETS: list[OIECConfig] = [
         primary="polymarket",
     ),
 
-    # ===== CRYPTO: MEDIUM-DATED =====
-    # 8. Bitcoin price target for the year
+    # ===== SPORTS =====
+    # 7. NBA Champion 2026
     OIECConfig(
-        idx=7,
-        name="Bitcoin reaches $150k in 2026",
-        poly_slug="when-will-bitcoin-hit-150k",
-        poly_outcome="By Dec 31",
-        tau_years=0.15,
-        ttr_years=0.70,
-        primary="polymarket",
-    ),
-
-    # ===== GEOPOLITICS =====
-    # 9. Iran / Israel conflict resolution
-    OIECConfig(
-        idx=8,
-        name="Iran × Israel conflict ends by end of 2026",
-        poly_slug="iran-israel-conflict-ends-by",
-        poly_outcome="Dec 31",
-        tau_years=0.20,
-        ttr_years=0.70,
-        primary="polymarket",
-    ),
-
-    # ===== SPORTS (broad appeal for demo) =====
-    # 10. NBA Champion 2026
-    OIECConfig(
-        idx=9,
+        idx=6,
         name="2026 NBA Champion — Boston Celtics",
         poly_slug="nba-champion-2026",
         poly_outcome="Boston Celtics",
@@ -147,21 +113,11 @@ MARKETS: list[OIECConfig] = [
         ttr_years=0.20,
         primary="polymarket",
     ),
-    # 11. FIFA World Cup 2026
-    OIECConfig(
-        idx=10,
-        name="2026 FIFA World Cup Winner — Spain",
-        poly_slug="fifa-world-cup-2026-winner",
-        poly_outcome="Spain",
-        tau_years=0.12,
-        ttr_years=0.30,
-        primary="polymarket",
-    ),
 
     # ===== SUPREME COURT / LONG-DATED =====
-    # 12. SCOTUS vacancy in 2026
+    # 8. SCOTUS vacancy in 2026
     OIECConfig(
-        idx=11,
+        idx=7,
         name="Supreme Court vacancy in 2026",
         poly_slug="supreme-court-vacancy-in-2026",
         poly_outcome="Yes",
