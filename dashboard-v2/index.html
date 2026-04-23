@@ -94,12 +94,126 @@
     </div>
   </div>
 
+  <!-- Live stats strip — real numbers pulled from the current payload -->
+  <div class="stats-strip" id="stats-strip">
+    <div class="stat-cell">
+      <div class="stat-k">Markets under coverage</div>
+      <div class="stat-v mono" id="stat-markets">—</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-k" data-explain="bvix-definition">Avg BVIX · model-free</div>
+      <div class="stat-v mono" id="stat-bvix">—</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-k" data-explain="sigma-hat">Avg σ̂ calibrated</div>
+      <div class="stat-v mono" id="stat-sigma">—</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-k">Mean τ · derivative horizon</div>
+      <div class="stat-v mono" id="stat-tau">—</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-k">Ticks served</div>
+      <div class="stat-v mono" id="stat-ticks">—</div>
+    </div>
+  </div>
+
+  <!-- How it works — three-step visual explanation of the OIEC thesis -->
+  <div class="how-it-works">
+    <div class="section-header">
+      <h2 class="display">How an <em>OIEC</em> works.</h2>
+      <p>Three steps from an underlying prediction market to a tradable derivative.</p>
+    </div>
+    <div class="steps-grid">
+      <div class="step-card">
+        <div class="step-number">01</div>
+        <div class="step-title">Observe</div>
+        <div class="step-body">
+          A prediction market quotes a probability <span class="formula">P ∈ [0, 1]</span>
+          for some future event. Capital backing a direct position is locked until the event
+          <span data-explain="ttr">resolves</span> — months or years away.
+        </div>
+        <div class="step-meta mono">Polymarket · Kalshi</div>
+      </div>
+      <div class="step-card">
+        <div class="step-number">02</div>
+        <div class="step-title">Price</div>
+        <div class="step-body">
+          The <span data-explain="jacobi-sde">Jacobi diffusion</span>
+          <span class="formula">dP = σ√(P(1−P)) dW</span>
+          respects the [0, 1] boundary and admits closed-form option Greeks
+          under a single calibrated <span data-explain="sigma-hat">σ̂</span>.
+        </div>
+        <div class="step-meta mono">Calls · Puts · Variance swaps</div>
+      </div>
+      <div class="step-card">
+        <div class="step-number">03</div>
+        <div class="step-title">Recycle</div>
+        <div class="step-body">
+          A <span data-explain="tau">τ-expiry OIEC</span> settles on the market-implied
+          probability at τ — not event resolution. Capital recycles at each expiry,
+          <span data-explain="horizon-shortening">compressing</span> the arbitrage bound.
+        </div>
+        <div class="step-meta mono">τ ≪ TTR</div>
+      </div>
+    </div>
+  </div>
+
   <div class="spotlights">
     <div class="spotlight-label">
       <h2 class="display"><span id="spotlight-count">—</span> markets, one <em>pricing engine</em>.</h2>
       <p>Each contract under coverage, priced live under the same calibrated Jacobi σ.</p>
     </div>
     <div class="spotlight-grid" id="spotlight-grid"></div>
+  </div>
+
+  <!-- Research foundation strip -->
+  <div class="research-strip">
+    <div class="research-main">
+      <div class="research-tag mono">§ Research foundation</div>
+      <h3 class="research-title">
+        <em>Option-Implied Event Contracts:</em>
+        A Derivatives Layer for Prediction Markets.
+      </h3>
+      <p class="research-abstract">
+        We introduce a family of derivatives priced under a Jacobi diffusion on the
+        underlying probability. Closed-form Greeks, a variance-swap replication, and
+        a belief-volatility index follow directly from the model. We show that the
+        derivatives layer compresses cross-venue arbitrage bounds by <em>O(100×)</em>
+        by shortening effective capital lockup from the event's resolution horizon to
+        the derivative's expiry.
+      </p>
+      <div class="research-cta">
+        <a class="btn btn-ghost" href="#">
+          Read the paper <span class="arrow">→</span>
+        </a>
+        <a class="btn btn-ghost" href="#">
+          Pricing-engine notebook <span class="arrow">→</span>
+        </a>
+      </div>
+    </div>
+    <div class="research-side">
+      <div class="kv-row">
+        <div class="kv-k">Model</div>
+        <div class="kv-v">Jacobi bounded-variance</div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-k">Calibration</div>
+        <div class="kv-v">Winsorized rolling σ̂</div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-k">Replication</div>
+        <div class="kv-v">Static, strike-weighted 1/K²</div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-k">Compression</div>
+        <div class="kv-v"><span id="research-compression">—</span>× mean</div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-k">Author</div>
+        <div class="kv-v">Palash Shah · CMU</div>
+      </div>
+    </div>
   </div>
 </section>
 

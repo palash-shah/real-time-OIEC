@@ -58,7 +58,10 @@ class Poller:
             m.idx: HistoryBuffer(HISTORY_POINTS) for m in MARKETS
         }
         self.last_payload: Optional[dict] = None
-        self.tick_count = 0
+        self.tick_count = 0           # poll cycles completed (backend loops)
+        self.quotes_served = 0        # total individual market price quotes
+                                      # successfully pushed into buffers since startup
+        self.started_at: Optional[float] = None
         self.last_error: Optional[str] = None
 
     # ---------- lifecycle ----------
@@ -150,6 +153,7 @@ class Poller:
     # ---------- main loop ----------
 
     async def _run_forever(self) -> None:
+        self.started_at = time.time()
         while True:
             started = time.time()
             try:
@@ -202,6 +206,7 @@ class Poller:
 
             if primary_price is not None:
                 self.buffers[m.idx].push(now, primary_price)
+                self.quotes_served += 1
 
             ts_list, p_list = self.buffers[m.idx].as_lists()
             if not p_list:
@@ -258,6 +263,8 @@ class Poller:
             "markets": markets_out,
             "_meta": {
                 "tick": self.tick_count,
+                "quotes_served": self.quotes_served,
+                "uptime_sec": round(time.time() - self.started_at, 1) if self.started_at else 0,
                 "kalshi_ok": self.kalshi_ok,
                 "poll_interval_sec": POLL_INTERVAL_SEC,
                 "last_error": self.last_error,

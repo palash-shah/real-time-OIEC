@@ -224,6 +224,37 @@ function renderHome() {
   const el = document.getElementById("home-bignum");
   el.innerHTML = avgCompression.toFixed(0) + '<span class="suffix">×</span>';
 
+  // Stats strip — pulls live aggregates from DATA
+  const avgBvix  = DATA.markets.reduce((s, m) => s + m.bvix_model_free, 0) / DATA.markets.length;
+  const avgSigma = DATA.markets.reduce((s, m) => s + m.sigma_hat, 0) / DATA.markets.length;
+  const avgTau   = DATA.markets.reduce((s, m) => s + m.tau, 0) / DATA.markets.length;
+  // "Ticks served" — prefer the backend's monotonic counter if present; it
+  // increments on every successful price push across all markets since the
+  // poller started. The old history_prices.length fallback caps at
+  // HISTORY_POINTS × markets, so this is the genuinely monotonic version.
+  const metaQuotes = DATA._meta && DATA._meta.quotes_served;
+  const totalTicks = (typeof metaQuotes === "number")
+    ? metaQuotes
+    : DATA.markets.reduce((s, m) => s + (m.history_prices?.length || 0), 0);
+
+  const setStat = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = value;
+  };
+  setStat("stat-markets", DATA.markets.length);
+  setStat("stat-bvix",    avgBvix.toFixed(3));
+  setStat("stat-sigma",   avgSigma.toFixed(3));
+  setStat("stat-tau",     avgTau.toFixed(2) + '<small>y</small>');
+  // Rough "ticks served" — history points summed. Displays with k/M suffix
+  // so 2,400 reads as "2.4k" rather than a bare number.
+  const fmtTicks = (n) => {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + '<small>M</small>';
+    if (n >= 1_000)     return (n / 1_000).toFixed(1)     + '<small>k</small>';
+    return String(n);
+  };
+  setStat("stat-ticks",   fmtTicks(totalTicks));
+  setStat("research-compression", avgCompression.toFixed(0));
+
   // Update the spotlight section header with the live market count (word form
   // reads more naturally than a digit for counts < 20)
   const countEl = document.getElementById("spotlight-count");
