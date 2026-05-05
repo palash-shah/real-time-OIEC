@@ -2,22 +2,21 @@
 poller.py — live data loop.
 
 Startup:
-    1. For each market in markets_config, resolve its Polymarket binding
-       (search query + outcome label -> conditionId + outcome index).
-       If Kalshi is configured, do the analogous search for a matching ticker.
-    2. Seed history buffers with synthetic Jacobi paths so the dashboard
-       paints immediately; these decay off the back of the ring as real
-       ticks land.
+  1. For each market in markets_config, resolve its Polymarket binding
+     (search query + outcome label -> conditionId + outcome index).
+     If Kalshi is configured, do the analogous search for a matching ticker.
+  2. Seed history buffers with synthetic Jacobi paths so the dashboard
+     paints immediately; these decay off the back of the ring as real
+     ticks land.
 
 Tick (every POLL_INTERVAL_SEC):
-    1. Fetch each resolved binding concurrently.
-    2. Append fresh prices to per-market history buffers.
-    3. Recalibrate sigma from each buffer.
-    4. Re-price OIEC surface, Greeks, BVIX.
-    5. Compute cross-venue arbitrage if both venues quoted.
-    6. Build unified payload and broadcast via the hub.
+  1. Fetch each resolved binding concurrently.
+  2. Append fresh prices to per-market history buffers.
+  3. Recalibrate sigma from each buffer.
+  4. Re-price OIEC surface, Greeks, BVIX.
+  5. Compute cross-venue arbitrage if both venues quoted.
+  6. Build unified payload and broadcast via the hub.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -34,13 +33,14 @@ from kalshi import KalshiClient, KalshiQuote
 from markets_config import MARKETS, OIECConfig
 from polymarket import PolymarketBinding, PolymarketClient, PolymarketQuote
 from pricing import bvix, surface, variance_swap_strike
+from pinning import estimate_beta0, pinning_panel, goodness_of_fit
 
 log = logging.getLogger(__name__)
 
-
 POLL_INTERVAL_SEC = float(os.environ.get("OIEC_POLL_INTERVAL", "5.0"))
-HISTORY_POINTS    = 300     # ~25 minutes @ 5s
-SYNTHETIC_DAYS    = 60
+
+HISTORY_POINTS = 300  # ~25 minutes @ 5s
+SYNTHETIC_DAYS = 60
 
 
 class Poller:
@@ -58,9 +58,9 @@ class Poller:
             m.idx: HistoryBuffer(HISTORY_POINTS) for m in MARKETS
         }
         self.last_payload: Optional[dict] = None
-        self.tick_count = 0           # poll cycles completed (backend loops)
-        self.quotes_served = 0        # total individual market price quotes
-                                      # successfully pushed into buffers since startup
+        self.tick_count = 0          # poll cycles completed (backend loops)
+        self.quotes_served = 0       # total individual market price quotes
+                                     # successfully pushed into buffers since startup
         self.started_at: Optional[float] = None
         self.last_error: Optional[str] = None
 
@@ -95,6 +95,7 @@ class Poller:
         # Polymarket token. Synthetic only fills markets we couldn't resolve.
         await self._prefill_real_history()
         self._seed_synthetic_history()
+
         asyncio.create_task(self._run_forever())
 
     async def stop(self) -> None:
@@ -139,7 +140,7 @@ class Poller:
                             best = max(mkts, key=lambda k: k.volume or 0)
                             self.kalshi_ticker[m.idx] = best.ticker
                             log.info(
-                                "Kalshi bound %r -> ticker=%s  (vol=%.0f)",
+                                "Kalshi bound %r -> ticker=%s (vol=%.0f)",
                                 m.name, best.ticker, best.volume,
                             )
                     except Exception as e:
@@ -162,6 +163,7 @@ class Poller:
             except Exception as e:
                 log.exception("poll tick failed")
                 self.last_error = str(e)
+
             elapsed = time.time() - started
             sleep_for = max(0.5, POLL_INTERVAL_SEC - elapsed)
             await asyncio.sleep(sleep_for)
@@ -203,7 +205,6 @@ class Poller:
             p_quote = poly_quotes.get(m.idx)
             k_quote = kalshi_quotes.get(m.idx)
             primary_price = self._choose_primary_price(m, p_quote, k_quote)
-
             if primary_price is not None:
                 self.buffers[m.idx].push(now, primary_price)
                 self.quotes_served += 1
@@ -216,6 +217,17 @@ class Poller:
             spot = p_list[-1]
             surf = surface(spot, sigma_hat, m.tau_years)
 
+            # ----- bridge / pinning diagnostics ---------------------------
+            # beta_0 calibrated from realized QV of logit(P) under the
+            # information-driven bridge calibration beta(t) = beta_0 / sqrt(T - t).
+            # See backend/pinning.py and Palash S. (2026), Terminal Pinning.
+            beta0_hat = estimate_beta0(p_list, ts_list, m.ttr_years)
+            pin = pinning_panel(p_list, ts_list, m.ttr_years, beta0_hat)
+            # Goodness-of-fit: Jacobi vs Bridge on the same buffer's tick-level
+            # squared increments via QLIKE loss (Patton 2011). Lower = better.
+            gof = goodness_of_fit(p_list, ts_list, m.ttr_years, sigma_hat, beta0_hat)
+            # --------------------------------------------------------------
+
             # Cross-venue arbitrage (only meaningful if both venues returned)
             spread_before_c = 0.0
             if p_quote and k_quote:
@@ -223,7 +235,7 @@ class Poller:
             compression = max(10.0, m.ttr_years / max(m.tau_years, 1e-3) * 13.0)
             spread_after_c = round(spread_before_c / compression, 4) if spread_before_c else 0.0
             ann_before = round((spread_before_c / 100.0) / m.ttr_years, 4) if spread_before_c else 0.0
-            ann_after  = round((spread_after_c  / 100.0) / m.tau_years,  4) if spread_after_c  else 0.0
+            ann_after = round((spread_after_c / 100.0) / m.tau_years, 4) if spread_after_c else 0.0
 
             markets_out.append({
                 "name": m.name,
@@ -235,7 +247,7 @@ class Poller:
                 **surf,
                 "variance_swap_strike": variance_swap_strike(sigma_hat, m.tau_years),
                 "bvix_model_based": bvix(sigma_hat, m.tau_years, "model_based"),
-                "bvix_model_free":  bvix(sigma_hat, m.tau_years, "model_free"),
+                "bvix_model_free": bvix(sigma_hat, m.tau_years, "model_free"),
                 "history_timestamps": [
                     datetime.fromtimestamp(t, tz=timezone.utc).isoformat() for t in ts_list
                 ],
@@ -244,18 +256,20 @@ class Poller:
                 "cross_platform_spread_cents": spread_before_c,
                 "arbitrage": {
                     "spread_before_cents": spread_before_c,
-                    "spread_after_cents":  spread_after_c,
-                    "compression_factor":  round(compression, 1),
+                    "spread_after_cents": spread_after_c,
+                    "compression_factor": round(compression, 1),
                     "annualized_return_before": ann_before,
-                    "annualized_return_after":  ann_after,
+                    "annualized_return_after": ann_after,
                 },
                 "_source": {
                     "polymarket": p_quote.yes_price if p_quote else None,
-                    "kalshi":     k_quote.yes_price if k_quote else None,
-                    "poly_outcome":  p_quote.binding.sub_market_title if p_quote else None,
-                    "poly_slug":     p_quote.binding.sub_market_slug if p_quote else None,
-                    "poly_event":    p_quote.binding.event_slug if p_quote else None,
+                    "kalshi": k_quote.yes_price if k_quote else None,
+                    "poly_outcome": p_quote.binding.sub_market_title if p_quote else None,
+                    "poly_slug": p_quote.binding.sub_market_slug if p_quote else None,
+                    "poly_event": p_quote.binding.event_slug if p_quote else None,
                 },
+                "pinning": pin,    # bridge-model diagnostics for the /pinning screen
+                "gof": gof,        # bridge-vs-Jacobi goodness-of-fit comparison
             })
 
         payload = {

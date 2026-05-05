@@ -178,7 +178,7 @@ if DASHBOARD_DIR.is_dir():
     @app.get("/", response_class=HTMLResponse)
     async def root():
         idx = DASHBOARD_DIR / "index.html"
-        return HTMLResponse(idx.read_text())
+        return HTMLResponse(idx.read_text(encoding="utf-8"))
 
     @app.get("/{fname:path}")
     async def static_file(fname: str):
