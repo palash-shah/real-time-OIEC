@@ -91,10 +91,22 @@ class Poller:
 
         await self._resolve_markets()
         # Pull real history from Polymarket's CLOB prices-history endpoint.
-        # This replaces the synthetic prefill for any market that has a bound
-        # Polymarket token. Synthetic only fills markets we couldn't resolve.
+        # If a market couldn't bind, its buffer is left empty and the
+        # market will be marked as "unbound" in the payload, so the dashboard
+        # can show a clear "no live data" state instead of synthetic phantoms.
         await self._prefill_real_history()
-        self._seed_synthetic_history()
+        # NOTE: synthetic seeding is INTENTIONALLY disabled. We used to call
+        #   self._seed_synthetic_history()
+        # here, which dropped 60-day Jacobi paths into every empty buffer so
+        # the dashboard would paint immediately. That path produced two
+        # subtle problems:
+        #   1. Markets that failed to resolve (e.g. resolved/closed contracts
+        #      that we didn't notice in markets_config) showed synthetic
+        #      data forever, looking like they were live.
+        #   2. The synthetic prices flowed straight into sigma_hat / beta0_hat
+        #      calibration, biasing the goodness-of-fit toward whatever shape
+        #      the synthetic seed had (which was Jacobi).
+        # Empty buffers are clearly empty. Better to show nothing than fake.
 
         asyncio.create_task(self._run_forever())
 
@@ -109,6 +121,19 @@ class Poller:
     async def _resolve_markets(self) -> None:
         """Resolve each market to stable bindings on the configured venues."""
         for m in MARKETS:
+            # Sanity: skip markets whose configured resolution date has already
+            # passed. Without this, a stale m.ttr_years would let the market
+            # render with TTR=0 and pinning math would divide by tiny numbers.
+            if m.ttr_years <= 0.0:
+                log.warning(
+                    "Skipping %r — m.ttr_years=%.4f is non-positive; "
+                    "this market's resolution date has already passed. "
+                    "Update markets_config.py.", m.name, m.ttr_years,
+                )
+                self.poly_bind[m.idx] = None
+                self.kalshi_ticker[m.idx] = None
+                continue
+
             # Polymarket
             if m.poly_slug and self.poly:
                 try:
@@ -201,6 +226,8 @@ class Poller:
 
         # --- per-market compute ---
         markets_out = []
+        n_unbound = 0
+        unbound_names: list[str] = []
         for m in MARKETS:
             p_quote = poly_quotes.get(m.idx)
             k_quote = kalshi_quotes.get(m.idx)
@@ -211,6 +238,11 @@ class Poller:
 
             ts_list, p_list = self.buffers[m.idx].as_lists()
             if not p_list:
+                # Market didn't bind to a live venue and has no synthetic seed
+                # (we deliberately disabled the synthetic seed in start()).
+                # Skip it but track for visibility in _meta.
+                n_unbound += 1
+                unbound_names.append(m.name)
                 continue
 
             sigma_hat = estimate_sigma_from_increments(p_list, ts_list)
@@ -282,6 +314,10 @@ class Poller:
                 "kalshi_ok": self.kalshi_ok,
                 "poll_interval_sec": POLL_INTERVAL_SEC,
                 "last_error": self.last_error,
+                "n_markets_configured": len(MARKETS),
+                "n_markets_live":       len(markets_out),
+                "n_markets_unbound":    n_unbound,
+                "unbound_names":        unbound_names,
             },
         }
         self.last_payload = payload
