@@ -5982,3 +5982,702 @@ footer {
   gap: 6px;
   align-items: baseline;
 }
+/* =======================================================================
+   PINNING screen styles — append to the END of styles.css.
+   Inherits all existing CSS variables (--ink, --line, --paper, etc.) and
+   utility classes (.mono, .display, .formula, .stat-cell, .stat-k, .stat-v,
+   .kv-row, .kv-k, .kv-v, .research-title, .research-abstract).
+   ======================================================================= */
+
+/* KPI summary strip — same look as the home stats-strip */
+.pinning-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  border: 1px solid var(--line, #e6e6e9);
+  border-radius: 12px;
+  background: var(--paper, #fff);
+  padding: 18px 0;
+  margin-bottom: 20px;
+}
+.pinning-summary .stat-cell {
+  padding: 0 22px;
+  border-right: 1px solid var(--line, #e6e6e9);
+}
+.pinning-summary .stat-cell:last-child {
+  border-right: none;
+}
+.pinning-summary-empty {
+  grid-column: 1 / -1;
+  padding: 18px 22px;
+  font-size: 13px;
+  color: var(--ink-3, #6e6e73);
+  line-height: 1.5;
+}
+.pinning-summary-empty code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  background: rgba(26,86,219,0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--accent, #1a56db);
+}
+@media (max-width: 880px) {
+  .pinning-summary { grid-template-columns: repeat(2, 1fr); }
+  .pinning-summary .stat-cell:nth-child(2) { border-right: none; }
+}
+
+/* Per-market card grid */
+.pinning-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+@media (max-width: 980px) {
+  .pinning-grid { grid-template-columns: 1fr; }
+}
+
+.pinning-card {
+  background: var(--paper, #fff);
+  border: 1px solid var(--line, #e6e6e9);
+  border-radius: 12px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pinning-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.pinning-card .venue {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-3, #6e6e73);
+  margin-bottom: 4px;
+}
+.pinning-card .title {
+  font-family: "Fraunces", serif;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--ink, #1d1d1f);
+  max-width: 380px;
+}
+
+.pinning-card-kpi {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 6px 14px;
+  flex-shrink: 0;
+}
+.pinning-card-kpi .kpi-mini { display: flex; flex-direction: column; align-items: flex-end; }
+.pinning-card-kpi .kpi-mini .k {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-4, #a1a1a6);
+}
+.pinning-card-kpi .kpi-mini .v {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink, #1d1d1f);
+  font-feature-settings: "tnum";
+}
+
+.pinning-chart-wrap {
+  height: 240px;
+  position: relative;
+}
+.pinning-chart-wrap canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.pinning-card-foot {
+  font-size: 11px;
+  color: var(--ink-3, #6e6e73);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line, #eeeef2);
+}
+.pinning-card-foot .legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 2px;
+  margin: 0 2px 2px 6px;
+  vertical-align: middle;
+}
+.pinning-card-foot .envelope-swatch {
+  background-image: linear-gradient(to right, var(--accent, #1a56db) 0 5px, transparent 5px 9px, var(--accent, #1a56db) 9px);
+  background-color: transparent;
+}
+.pinning-card-foot sup { font-size: 9px; }
+
+.pinning-card .pin-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--ink-3, #6e6e73);
+  font-size: 13px;
+}
+
+/* Theory explainer block — mirrors the .research-strip on /home */
+.pinning-theory {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 32px;
+  background: var(--paper, #fff);
+  border: 1px solid var(--line, #e6e6e9);
+  border-radius: 12px;
+  padding: 28px 32px;
+  margin-top: 12px;
+}
+@media (max-width: 880px) {
+  .pinning-theory { grid-template-columns: 1fr; gap: 24px; }
+}
+
+.pinning-theory .theory-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-4, #a1a1a6);
+  margin-bottom: 12px;
+}
+.pinning-theory .research-title {
+  font-family: "Fraunces", serif;
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--ink, #1d1d1f);
+  margin-bottom: 14px;
+  line-height: 1.25;
+}
+.pinning-theory .research-title em {
+  font-style: italic;
+  font-weight: 400;
+}
+.pinning-theory .research-abstract {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-2, #3a3a3c);
+  margin-bottom: 12px;
+}
+.pinning-theory .research-abstract:last-child { margin-bottom: 0; }
+.pinning-theory .research-abstract strong {
+  color: var(--ink, #1d1d1f);
+  font-weight: 600;
+}
+.pinning-theory .research-abstract .formula {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12.5px;
+  background: rgba(26,86,219,0.05);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--accent, #1a56db);
+}
+
+.pinning-theory .theory-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--line, #e6e6e9);
+}
+.pinning-theory .theory-kv .kv-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line, #e6e6e9);
+  font-size: 12.5px;
+  align-items: baseline;
+}
+.pinning-theory .theory-kv .kv-row:last-child { border-bottom: none; }
+.pinning-theory .theory-kv .kv-k {
+  color: var(--ink-3, #6e6e73);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.pinning-theory .theory-kv .kv-v {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--ink, #1d1d1f);
+  font-size: 12px;
+  text-align: right;
+}
+.pinning-theory .theory-kv .kv-v sup { font-size: 9px; }
+
+/* =======================================================================
+   GOODNESS-OF-FIT comparison (Pinning screen, § 05.2)
+   ======================================================================= */
+
+.gof-section {
+  margin-top: 32px;
+}
+
+.gof-header {
+  margin-bottom: 20px;
+}
+.gof-header .eyebrow {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--ink-4, #a1a1a6);
+  margin-bottom: 8px;
+}
+.gof-header .display {
+  font-family: "Fraunces", serif;
+  font-size: 28px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  margin-bottom: 8px;
+  line-height: 1.2;
+}
+.gof-header p {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-2, #3a3a3c);
+  max-width: 720px;
+}
+
+.gof-hero {
+  background: var(--paper, #fff);
+  border: 1px solid var(--line, #e6e6e9);
+  border-radius: 12px;
+  padding: 32px 36px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gof-hero-eyebrow {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--ink-4, #a1a1a6);
+}
+.gof-hero-headline {
+  font-family: "Fraunces", serif;
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.0;
+  color: var(--ink, #1d1d1f);
+}
+.gof-hero-headline strong {
+  font-weight: 600;
+  font-style: italic;
+}
+.gof-hero-caption {
+  font-size: 13px;
+  color: var(--ink-2, #3a3a3c);
+  line-height: 1.5;
+}
+.gof-hero-caption strong {
+  color: var(--ink, #1d1d1f);
+  font-weight: 600;
+}
+
+.gof-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 980px) {
+  .gof-grid { grid-template-columns: 1fr; }
+}
+
+.gof-card {
+  background: var(--paper, #fff);
+  border: 1px solid var(--line, #e6e6e9);
+  border-radius: 12px;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.gof-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+.gof-card-head .venue {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-3, #6e6e73);
+  margin-bottom: 4px;
+}
+.gof-card-head .title {
+  font-family: "Fraunces", serif;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--ink, #1d1d1f);
+}
+.gof-card-head .winner-tag {
+  flex-shrink: 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.gof-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gof-bar-row {
+  display: grid;
+  grid-template-columns: 60px 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+.gof-bar-label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.gof-bar-track {
+  background: var(--line, #f4f4f7);
+  border-radius: 3px;
+  height: 16px;
+  overflow: hidden;
+  position: relative;
+}
+.gof-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease-out;
+}
+.gof-bar-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink, #1d1d1f);
+  font-feature-settings: "tnum";
+  min-width: 64px;
+  text-align: right;
+}
+
+.gof-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line, #eeeef2);
+  border-bottom: 1px solid var(--line, #eeeef2);
+}
+.gof-stats .stat-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.gof-stats .stat-mini .k {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-4, #a1a1a6);
+}
+.gof-stats .stat-mini .v {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink, #1d1d1f);
+  font-feature-settings: "tnum";
+}
+
+.gof-spark {
+  height: 90px;
+  position: relative;
+}
+.gof-spark canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+.gof-spark-caption {
+  font-size: 10.5px;
+  color: var(--ink-3, #6e6e73);
+  text-align: center;
+  margin-top: -6px;
+}
+
+/* Calibrating state — for markets not yet near resolution */
+.gof-not-eligible {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 8px 0 4px;
+}
+.gof-not-eligible .not-eligible-msg {
+  font-size: 13px;
+  color: var(--ink-2, #3a3a3c);
+  line-height: 1.55;
+  font-style: italic;
+}
+.gof-not-eligible .not-eligible-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--line, #eeeef2);
+}
+.gof-not-eligible .not-eligible-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.gof-not-eligible .not-eligible-stats .k {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-4, #a1a1a6);
+}
+.gof-not-eligible .not-eligible-stats .v {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink, #1d1d1f);
+}
+
+/* =======================================================================
+   Unbound-markets warning banner (Pinning screen, above § 05.2)
+   ======================================================================= */
+.pinning-unbound-banner {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  background: linear-gradient(180deg, rgba(180, 83, 9, 0.05), rgba(180, 83, 9, 0.02));
+  border: 1px solid rgba(180, 83, 9, 0.30);
+  border-radius: 12px;
+  padding: 18px 22px;
+  margin: 20px 0 24px;
+}
+.pinning-unbound-banner .unbound-icon {
+  font-size: 22px;
+  color: #b45309;
+  line-height: 1.0;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.pinning-unbound-banner .unbound-body {
+  flex: 1;
+}
+.pinning-unbound-banner .unbound-headline {
+  font-size: 14px;
+  color: var(--ink, #1d1d1f);
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+.pinning-unbound-banner .unbound-headline strong {
+  color: #b45309;
+  font-weight: 600;
+  font-feature-settings: "tnum";
+}
+.pinning-unbound-banner .unbound-detail {
+  font-size: 12.5px;
+  color: var(--ink-2, #3a3a3c);
+  line-height: 1.55;
+}
+.pinning-unbound-banner .unbound-detail code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  background: rgba(180, 83, 9, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #b45309;
+}
+
+/* =======================================================================
+   PLL row layout — replaces the old QLIKE bar comparison
+   ======================================================================= */
+.gof-pll-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+.gof-pll-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: center;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.015);
+  border-radius: 6px;
+}
+.gof-pll-row:nth-child(2) {
+  background: rgba(180, 83, 9, 0.04);
+}
+.gof-pll-row:nth-child(3) {
+  background: transparent;
+  border-top: 1px solid var(--line, #eeeef2);
+  margin-top: 4px;
+  padding-top: 10px;
+  border-radius: 0;
+}
+.gof-pll-label {
+  font-size: 11px;
+  color: var(--ink-3, #6e6e73);
+  font-weight: 500;
+}
+.gof-pll-vals {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+}
+.gof-pll-vals .mono {
+  font-feature-settings: "tnum";
+}
+
+/* =======================================================================
+   Variance-coverage rows (v9 — replaces PLL rows as primary metric)
+   ======================================================================= */
+.gof-coverage-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 0;
+  position: relative;
+}
+.gof-coverage-row {
+  display: grid;
+  grid-template-columns: 60px 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+.gof-cov-label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.gof-cov-track {
+  background: var(--line, #f4f4f7);
+  border-radius: 3px;
+  height: 16px;
+  overflow: hidden;
+  position: relative;
+}
+.gof-cov-target {
+  /* dotted line at 95% */
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 95%;
+  width: 0;
+  border-left: 1.5px dashed rgba(0, 0, 0, 0.45);
+  z-index: 2;
+  pointer-events: none;
+}
+.gof-cov-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease-out;
+  z-index: 1;
+}
+.gof-cov-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink, #1d1d1f);
+  font-feature-settings: "tnum";
+  min-width: 56px;
+  text-align: right;
+}
+.gof-cov-target-caption {
+  font-size: 10px;
+  color: var(--ink-3, #6e6e73);
+  text-align: right;
+  margin-top: 2px;
+  font-style: italic;
+}
+
+/* PLL details (collapsed by default) */
+.gof-details {
+  margin-top: 6px;
+  padding: 6px 0;
+  font-size: 11.5px;
+  color: var(--ink-3, #6e6e73);
+}
+.gof-details summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 4px 0;
+}
+.gof-details summary:hover {
+  color: var(--ink, #1d1d1f);
+}
+.gof-details[open] summary {
+  margin-bottom: 6px;
+}
+
+/* =======================================================================
+   Terminal-ambiguity block (v10 — primary metric)
+   ======================================================================= */
+.gof-horizon-block {
+  background: linear-gradient(180deg, rgba(26,86,219,0.04), rgba(26,86,219,0.01));
+  border: 1px solid rgba(26,86,219,0.15);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 8px 0;
+}
+.gof-horizon-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-3, #6e6e73);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+.gof-horizon-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+}
+.gof-horizon-label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--ink-2, #3a3a3c);
+  font-weight: 600;
+}
+.gof-horizon-pair {
+  display: flex;
+  gap: 16px;
+}
+.gof-horizon-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 12px;
+}
+.gof-horizon-stat .hl {
+  font-weight: 700;
+  font-size: 10px;
+}
+.gof-horizon-empirical {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(0,0,0,0.1);
+  font-size: 11px;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
